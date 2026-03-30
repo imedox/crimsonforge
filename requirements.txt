@@ -1,0 +1,10 @@
+PySide6>=6.7.0
+lz4>=4.3.0
+cryptography>=42.0.0
+fonttools>=4.50.0
+openai>=1.60.0
+anthropic>=0.40.0
+google-genai>=1.5.0
+cohere>=5.13.0
+Pillow>=10.3.0
+chardet>=5.2.0

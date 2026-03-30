@@ -1,0 +1,48 @@
+{
+    "version": "1.0.0",
+    "general": {
+        "theme": "dark",
+        "language": "en",
+        "last_game_path": "",
+        "last_output_path": "",
+        "recent_files": []
+    },
+    "ai_providers": {
+        "openai": {
+            "enabled": true,
+            "api_key": "",
+            "base_url": "https://api.openai.com/v1",
+            "default_model": "",
+            "timeout_seconds": 60,
+            "max_retries": 3
+        },
+        "anthropic": {
+            "enabled": true,
+            "api_key": "",
+            "base_url": "https://api.anthropic.com/v1",
+            "default_model": "",
+            "timeout_seconds": 60,
+            "max_retries": 3
+        }
+    },
+    "translation": {
+        "autosave_enabled": true,
+        "autosave_interval_seconds": 30,
+        "batch_size": 10,
+        "batch_delay_ms": 500,
+        "max_concurrent_requests": 3,
+        "default_source_lang": "en",
+        "default_target_lang": ""
+    },
+    "repack": {
+        "auto_backup": true,
+        "verify_after_repack": true,
+        "preserve_timestamps": true,
+        "backup_dir": ""
+    },
+    "advanced": {
+        "log_level": "INFO",
+        "log_file": "",
+        "debug_mode": false
+    }
+}
