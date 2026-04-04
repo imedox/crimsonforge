@@ -327,13 +327,32 @@ class PreviewPane(QWidget):
         self._stack.setCurrentIndex(IDX_IMAGE)
 
     def _show_mesh_info(self, path: str) -> None:
-        """Render a static 3D preview image of the mesh."""
+        """Show an interactive 3D preview of the mesh."""
         try:
             from core.mesh_parser import parse_mesh
 
             with open(path, "rb") as f:
                 data = f.read()
             mesh = parse_mesh(data, os.path.basename(path))
+
+            all_verts = []
+            all_faces = []
+            offset = 0
+            for sm in mesh.submeshes:
+                all_verts.extend(sm.vertices)
+                for a, b, c in sm.faces:
+                    all_faces.append((a + offset, b + offset, c + offset))
+                offset += len(sm.vertices)
+
+            if all_verts and all_faces:
+                info_text = (
+                    f"{mesh.total_vertices:,} verts | {mesh.total_faces:,} faces | "
+                    f"{len(mesh.submeshes)} submesh(es)"
+                )
+                self._mesh_viewer.set_mesh(all_verts, all_faces, info_text=info_text)
+                self._info_label.setText(self._info_label.text() + f"  |  {info_text}")
+                self._stack.setCurrentIndex(IDX_MESH)
+                return
 
             if not mesh.submeshes:
                 self._show_empty("No geometry found in this mesh file")

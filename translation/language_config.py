@@ -8,6 +8,7 @@ import os
 from dataclasses import dataclass
 from typing import Optional
 
+from utils.app_paths import data_path
 from utils.logger import get_logger
 
 logger = get_logger("translation.language_config")
@@ -27,8 +28,7 @@ class LanguageConfig:
 
     def __init__(self, languages_file: str = ""):
         if not languages_file:
-            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            languages_file = os.path.join(base_dir, "data", "languages.json")
+            languages_file = str(data_path("languages.json"))
 
         self._languages: list[LanguageInfo] = []
         self._by_code: dict[str, LanguageInfo] = {}

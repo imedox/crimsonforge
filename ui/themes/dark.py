@@ -11,6 +11,13 @@ QMainWindow, QDialog {
 QWidget {
     font-family: "Segoe UI", "Microsoft YaHei", "Malgun Gothic", "Meiryo", "Noto Sans", sans-serif;
 }
+QWidget#settingsTab,
+QWidget#settingsPage,
+QWidget#settingsScrollViewport,
+QWidget#settingsScrollContent,
+QStackedWidget#settingsStack {
+    background-color: #1e1e2e;
+}
 
 /* ========== TABS ========== */
 QTabWidget::pane {

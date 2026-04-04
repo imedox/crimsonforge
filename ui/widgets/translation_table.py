@@ -27,6 +27,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QColor, QBrush, QKeySequence, QShortcut, QAction
 
 from translation.translation_state import TranslationEntry, StringStatus
+from ui.widgets.search_history_line_edit import SearchHistoryLineEdit
 
 
 STATUS_COLORS = {
@@ -522,8 +523,9 @@ class TranslationTableWidget(QWidget):
     status_changed = Signal(int, str)
     entry_double_clicked = Signal(int)
 
-    def __init__(self, parent=None):
+    def __init__(self, config=None, parent=None):
         super().__init__(parent)
+        self._config = config
         self._filter_timer = QTimer(self)
         self._filter_timer.setSingleShot(True)
         self._filter_timer.setInterval(300)
@@ -577,7 +579,7 @@ class TranslationTableWidget(QWidget):
         self._usage_filter.currentIndexChanged.connect(self._schedule_filter)
         filter_row.addWidget(self._usage_filter)
 
-        self._search_input = QLineEdit()
+        self._search_input = SearchHistoryLineEdit(self._config, "translate")
         self._search_input.setPlaceholderText(
             'Search: text, key:quest*, {*}, locked:yes, empty:yes ...'
         )

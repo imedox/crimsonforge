@@ -37,6 +37,7 @@ from core.audio_index import (
 )
 from ui.widgets.audio_player import AudioPlayerWidget
 from ui.widgets.progress_widget import ProgressWidget
+from ui.widgets.search_history_line_edit import SearchHistoryLineEdit
 from ui.dialogs.file_picker import pick_directory, pick_file, pick_save_file
 from ui.dialogs.confirmation import show_error, show_info, confirm_action
 from utils.thread_worker import FunctionWorker
@@ -227,7 +228,7 @@ class AudioTab(QWidget):
         tb.addWidget(self._cat_filter)
 
         tb.addWidget(QLabel("Search:"))
-        self._search_input = QLineEdit()
+        self._search_input = SearchHistoryLineEdit(self._config, "audio")
         self._search_input.setPlaceholderText("Search by filename, key, text, NPC voice...")
         self._search_input.textChanged.connect(lambda _: self._search_timer.start())
         tb.addWidget(self._search_input, 1)

@@ -4,6 +4,7 @@ Uses LZ4 block mode (no frame header) to match the game's format.
 Also supports zlib for PAMT compression type 4.
 """
 
+import struct
 import zlib
 import lz4.block
 
@@ -13,6 +14,48 @@ COMP_RAW = 1
 COMP_LZ4 = 2
 COMP_CUSTOM = 3
 COMP_ZLIB = 4
+
+
+def _decompress_type1_par(data: bytes) -> bytes:
+    """Decompress a type-1 PAR container with per-section LZ4 blocks.
+
+    Some Crimson Desert PAR files store the 80-byte header uncompressed and
+    then use the slot table at 0x10 as repeated ``[u32 comp_size, u32 decomp_size]``
+    pairs. When a slot's ``comp_size`` is non-zero, that section is LZ4 block
+    compressed inside the file payload itself.
+    """
+    if len(data) < 0x50 or data[:4] != b"PAR ":
+        return data
+
+    output = bytearray(data[:0x50])
+    file_offset = 0x50
+    saw_compressed_section = False
+
+    for slot in range(8):
+        slot_off = 0x10 + slot * 8
+        comp_size = struct.unpack_from("<I", data, slot_off)[0]
+        decomp_size = struct.unpack_from("<I", data, slot_off + 4)[0]
+
+        if decomp_size == 0:
+            continue
+
+        if comp_size > 0:
+            saw_compressed_section = True
+            blob = data[file_offset:file_offset + comp_size]
+            output.extend(lz4.block.decompress(blob, uncompressed_size=decomp_size))
+            file_offset += comp_size
+        else:
+            output.extend(data[file_offset:file_offset + decomp_size])
+            file_offset += decomp_size
+
+    if not saw_compressed_section:
+        return data
+
+    # Mark the output header as fully decompressed.
+    for slot in range(8):
+        struct.pack_into("<I", output, 0x10 + slot * 8, 0)
+
+    return bytes(output)
 
 
 def decompress(data: bytes, original_size: int, compression_type: int) -> bytes:
@@ -33,7 +76,7 @@ def decompress(data: bytes, original_size: int, compression_type: int) -> bytes:
         return data
 
     if compression_type == COMP_RAW:
-        return data[:original_size]
+        return _decompress_type1_par(data)[:original_size]
 
     if compression_type == COMP_LZ4:
         try:
@@ -80,12 +123,15 @@ def compress(data: bytes, compression_type: int) -> bytes:
 
     Args:
         data: Uncompressed data bytes.
-        compression_type: 0=none, 2=LZ4, 4=zlib.
+        compression_type: 0=none, 1=raw passthrough, 2=LZ4, 4=zlib.
 
     Returns:
         Compressed data.
     """
     if compression_type == COMP_NONE:
+        return data
+
+    if compression_type == COMP_RAW:
         return data
 
     if compression_type == COMP_LZ4:
@@ -96,7 +142,7 @@ def compress(data: bytes, compression_type: int) -> bytes:
 
     raise ValueError(
         f"Cannot compress with type {compression_type}. "
-        f"Only types 0 (none), 2 (LZ4), and 4 (zlib) are supported for compression."
+        f"Only types 0 (none), 1 (raw), 2 (LZ4), and 4 (zlib) are supported for compression."
     )
 
 

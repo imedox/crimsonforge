@@ -25,7 +25,9 @@ from PySide6.QtGui import QColor, QBrush, QKeySequence, QShortcut
 from core.vfs_manager import VfsManager
 from core.pamt_parser import PamtData, PamtFileEntry
 from core.file_detector import detect_file_type, get_syntax_type, is_text_file
+from core.item_index import build_item_index
 from ui.widgets.preview_pane import PreviewPane
+from ui.widgets.search_history_line_edit import SearchHistoryLineEdit
 from ui.widgets.syntax_editor import SyntaxEditor
 from ui.widgets.progress_widget import ProgressWidget
 from ui.dialogs.file_picker import pick_directory, pick_save_file
@@ -64,6 +66,15 @@ _COL_TYPE = 2
 _COL_PKG = 3
 _COL_COUNT = 4
 _HEADERS = ["File", "Size", "Type", "Pkg"]
+_ITEM_MODEL_SUFFIXES = (
+    "_l", "_r", "_u", "_s", "_t",
+    "_index01", "_index02", "_index03",
+)
+_ITEM_MODEL_PREFIXES = (
+    "itemicon_prefab_",
+    "itemicon_",
+    "prefab_",
+)
 
 
 class _ArchiveRow:
@@ -72,18 +83,20 @@ class _ArchiveRow:
     Extension and path_lower are pre-computed for instant filtering.
     type_desc is lazy-computed on first access (only visible rows need it).
     """
-    __slots__ = ("entry", "group", "ext", "path_lower", "size_raw",
-                 "_size_str", "_type_desc", "checked")
+    __slots__ = ("entry", "group", "ext", "path_lower", "stem_lower", "size_raw",
+                 "_size_str", "_type_desc", "checked", "search_extra")
 
     def __init__(self, entry: PamtFileEntry, group: str):
         self.entry = entry
         self.group = group
         self.path_lower = entry.path.lower()
         self.ext = os.path.splitext(self.path_lower)[1]
+        self.stem_lower = os.path.splitext(os.path.basename(self.path_lower))[0]
         self.size_raw = entry.orig_size
         self._size_str = None
         self._type_desc = None
         self.checked = True
+        self.search_extra = ""
 
     @property
     def size_str(self) -> str:
@@ -157,9 +170,12 @@ class _ArchiveModel(QAbstractTableModel):
                 continue
             if search_text:
                 if use_glob:
-                    if not _fn.fnmatch(row.path_lower, search_text):
+                    if not (
+                        _fn.fnmatch(row.path_lower, search_text)
+                        or (row.search_extra and _fn.fnmatch(row.search_extra, search_text))
+                    ):
                         continue
-                elif search_text not in row.path_lower:
+                elif search_text not in row.path_lower and search_text not in row.search_extra:
                     continue
             result.append(i)
         self._filtered = result
@@ -282,6 +298,7 @@ class ExplorerTab(QWidget):
         self._vfs: VfsManager = None
         self._all_groups: list[str] = []
         self._worker: FunctionWorker = None
+        self._item_index = None
         self._current_edit_file = ""
         self._temp_dir = tempfile.mkdtemp(prefix="crimsonforge_preview_")
         self._search_timer = QTimer(self)
@@ -320,10 +337,13 @@ class ExplorerTab(QWidget):
         toolbar.addWidget(self._type_filter)
 
         toolbar.addWidget(QLabel("Search:"))
-        self._search_input = QLineEdit()
-        self._search_input.setPlaceholderText("Search: name, *.dds, ext:.pam, *sword*...")
+        self._search_input = SearchHistoryLineEdit(self._config, "explorer")
+        self._search_input.setPlaceholderText(
+            "Search files or item names: Vow of the Dead King, *.dds, ext:.pam..."
+        )
         self._search_input.setToolTip(
-            "Search files by name or pattern:\n"
+            "Search files or item names by name or pattern:\n"
+            "  Vow of the Dead King - related PAC/prefab/model files\n"
             "  sword         — files containing 'sword'\n"
             "  *.dds         — wildcard glob pattern\n"
             "  *armor*sword* — multiple wildcards\n"
@@ -473,6 +493,8 @@ class ExplorerTab(QWidget):
     def initialize_from_game(self, vfs: VfsManager, groups: list[str]) -> None:
         self._vfs = vfs
         self._all_groups = groups
+        self._item_index = None
+        self._load_item_index()
         self._group_combo.blockSignals(True)
         self._group_combo.clear()
         self._group_combo.addItem(ALL_PACKAGES)
@@ -481,6 +503,67 @@ class ExplorerTab(QWidget):
         self._group_combo.setCurrentText(ALL_PACKAGES)
         self._on_group_changed(ALL_PACKAGES)
         self._progress.set_status(f"Game loaded: {len(groups)} package groups")
+
+    def _load_item_index(self) -> None:
+        """Build the item-name search index from live game data."""
+        if not self._vfs:
+            return
+
+        def _progress(message: str) -> None:
+            self._progress.set_status(f"Building item search index... {message}")
+            QApplication.processEvents()
+
+        try:
+            self._item_index = build_item_index(self._vfs, progress_fn=_progress)
+            if self._item_index:
+                self._progress.set_status(
+                    f"Item search ready: {len(self._item_index.items):,} items"
+                )
+        except Exception as e:
+            self._item_index = None
+            logger.warning("Item search index unavailable: %s", e)
+            self._progress.set_status(f"Item search unavailable: {e}")
+
+    def _build_row(self, entry: PamtFileEntry, group: str) -> _ArchiveRow:
+        """Create one archive row and attach item-name aliases when available."""
+        row = _ArchiveRow(entry, group)
+        if not self._item_index or not self._item_index.model_base_aliases:
+            return row
+
+        aliases = []
+        seen = set()
+        for key in self._candidate_item_alias_keys(row.stem_lower):
+            alias = self._item_index.model_base_aliases.get(key)
+            if alias and alias not in seen:
+                seen.add(alias)
+                aliases.append(alias)
+        if aliases:
+            row.search_extra = " ".join(aliases)
+        return row
+
+    def _candidate_item_alias_keys(self, stem_lower: str) -> list[str]:
+        """Return normalized model keys that may map this row to an item name."""
+        keys = []
+        seen = set()
+
+        def _add(value: str) -> None:
+            if value and value not in seen:
+                seen.add(value)
+                keys.append(value)
+
+        _add(stem_lower)
+
+        for prefix in _ITEM_MODEL_PREFIXES:
+            if stem_lower.startswith(prefix):
+                _add(stem_lower[len(prefix):])
+
+        snapshot = list(keys)
+        for key in snapshot:
+            for suffix in _ITEM_MODEL_SUFFIXES:
+                if key.endswith(suffix) and len(key) > len(suffix) + 4:
+                    _add(key[:-len(suffix)])
+
+        return keys
 
     def _browse_output(self):
         path = pick_directory(self, "Select Output Directory")
@@ -495,7 +578,7 @@ class ExplorerTab(QWidget):
                 self._load_all_packages()
             else:
                 pamt = self._vfs.load_pamt(group)
-                rows = [_ArchiveRow(e, group) for e in pamt.file_entries]
+                rows = [self._build_row(e, group) for e in pamt.file_entries]
                 self._model.set_data(rows)
             self._apply_filter()
         except Exception as e:
@@ -509,7 +592,7 @@ class ExplorerTab(QWidget):
             try:
                 pamt = self._vfs.load_pamt(group)
                 for entry in pamt.file_entries:
-                    all_rows.append(_ArchiveRow(entry, group))
+                    all_rows.append(self._build_row(entry, group))
             except Exception as e:
                 logger.warning("Error loading group %s: %s", group, e)
             if (i + 1) % 5 == 0:
@@ -578,7 +661,7 @@ class ExplorerTab(QWidget):
                     export_fbx_act = menu.addAction("Export as FBX")
                     export_fbx_act.triggered.connect(lambda _=False, e=entry: self._export_mesh(e, "fbx"))
                     menu.addSeparator()
-                    import_act = menu.addAction("Import OBJ (replace mesh)")
+                    import_act = menu.addAction("Import OBJ (preview rebuilt mesh)")
                     import_act.triggered.connect(lambda _=False, e=entry: self._import_mesh(e))
                     patch_act = menu.addAction("Import OBJ + Patch to Game")
                     patch_act.triggered.connect(lambda _=False, e=entry: self._import_and_patch_mesh(e))
@@ -783,7 +866,7 @@ class ExplorerTab(QWidget):
             show_error(self, "Export Error", str(e))
 
     def _import_mesh(self, entry: PamtFileEntry):
-        """Import an OBJ file to replace a mesh, preview the result."""
+        """Import an OBJ file, rebuild the mesh, and preview the result."""
         from ui.dialogs.file_picker import pick_file
         obj_path = pick_file(self, "Select OBJ File", filters="OBJ Files (*.obj);;All Files (*.*)")
         if not obj_path:
@@ -792,7 +875,7 @@ class ExplorerTab(QWidget):
         try:
             self._progress.set_status(f"Importing {os.path.basename(obj_path)}...")
 
-            from core.mesh_importer import import_obj, build_mesh
+            from core.mesh_importer import import_obj, build_mesh, transfer_pam_edit_to_pamlod_mesh
             imported = import_obj(obj_path)
 
             if not imported.submeshes:
@@ -835,6 +918,7 @@ class ExplorerTab(QWidget):
                       f"Faces: {imported.total_faces:,}\n"
                       f"Submeshes: {len(imported.submeshes)}\n"
                       f"New size: {len(new_data):,} bytes\n\n"
+                      f"This step only previews the rebuilt mesh.\n"
                       f"Use 'Import OBJ + Patch to Game' to write to game files.")
 
         except Exception as e:
@@ -870,13 +954,49 @@ class ExplorerTab(QWidget):
             # Build new binary
             new_data = build_mesh(imported, original_data)
 
+            # Find which package group this entry belongs to
+            paz_dir = os.path.basename(os.path.dirname(entry.paz_file))
+
+            # Load PAMT data for this group
+            pamt_data = self._vfs.load_pamt(paz_dir)
+
+            extra_mod_files = []
+            pair_note = ""
+            pair_warning = ""
+            if imported.format == "pam":
+                paired_path = entry.path[:-4] + ".pamlod"
+                paired_entry = next(
+                    (e for e in pamt_data.file_entries if e.path.lower() == paired_path.lower()),
+                    None,
+                )
+                if paired_entry:
+                    try:
+                        paired_original = self._vfs.read_entry_data(paired_entry)
+                        paired_mesh = transfer_pam_edit_to_pamlod_mesh(
+                            imported, original_data, paired_original, paired_entry.path
+                        )
+                        paired_new_data = build_mesh(paired_mesh, paired_original)
+                        from core.repack_engine import ModifiedFile
+                        extra_mod_files.append(ModifiedFile(
+                            data=paired_new_data,
+                            entry=paired_entry,
+                            pamt_data=pamt_data,
+                            package_group=paz_dir,
+                        ))
+                        pair_note = f"\nPaired LOD: {paired_entry.path}"
+                    except Exception as pair_exc:
+                        pair_warning = f"\nPaired LOD not patched: {pair_exc}"
+                        logger.warning("Paired PAMLOD patch skipped for %s: %s", entry.path, pair_exc)
+
             # Confirm with user
             if not confirm_action(self, "Patch to Game",
                                   f"Replace {entry.path} in game?\n\n"
                                   f"Original: {len(original_data):,} bytes\n"
                                   f"New: {len(new_data):,} bytes\n"
                                   f"Vertices: {imported.total_vertices:,}\n"
-                                  f"Faces: {imported.total_faces:,}\n\n"
+                                  f"Faces: {imported.total_faces:,}"
+                                  f"{pair_note}"
+                                  f"{pair_warning}\n\n"
                                   f"A backup will be created automatically."):
                 return
 
@@ -884,12 +1004,6 @@ class ExplorerTab(QWidget):
             from core.repack_engine import RepackEngine, ModifiedFile
             game_path = os.path.dirname(os.path.dirname(entry.paz_file))
             papgt_path = os.path.join(game_path, "meta", "0.papgt")
-
-            # Find which package group this entry belongs to
-            paz_dir = os.path.basename(os.path.dirname(entry.paz_file))
-
-            # Load PAMT data for this group
-            pamt_data = self._vfs.load_pamt(paz_dir)
 
             mod_file = ModifiedFile(
                 data=new_data,
@@ -900,7 +1014,7 @@ class ExplorerTab(QWidget):
 
             engine = RepackEngine(game_path)
             result = engine.repack(
-                [mod_file], papgt_path=papgt_path,
+                [mod_file, *extra_mod_files], papgt_path=papgt_path,
                 create_backup=True, verify_after=True,
             )
 
@@ -913,10 +1027,13 @@ class ExplorerTab(QWidget):
                           f"Successfully patched {entry.path}\n\n"
                           f"Vertices: {imported.total_vertices:,}\n"
                           f"Faces: {imported.total_faces:,}\n"
-                          f"Size: {len(new_data):,} bytes\n\n"
+                          f"Size: {len(new_data):,} bytes"
+                          f"{pair_note}"
+                          f"{pair_warning}\n\n"
                           f"Launch the game to see your changes!")
             else:
-                show_error(self, "Patch Error", f"Repack failed: {result.error}")
+                err_text = "; ".join(result.errors) if result.errors else "Unknown repack failure."
+                show_error(self, "Patch Error", f"Repack failed: {err_text}")
 
         except Exception as e:
             self._progress.set_status(f"Patch error: {e}")

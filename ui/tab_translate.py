@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QComboBox, QGroupBox, QApplication, QProgressBar,
 )
+from PySide6.QtCore import QSignalBlocker
 
 from core.vfs_manager import VfsManager
 from core.paloc_parser import parse_paloc, build_paloc, PalocEntry
@@ -42,7 +43,7 @@ from translation.localization_usage_index import (
 from translation.autosave_manager import AutosaveManager
 from translation.baseline_manager import BaselineManager
 from translation.glossary_manager import GlossaryManager
-from ai.provider_registry import ProviderRegistry
+from ai.provider_registry import ProviderRegistry, PROVIDER_CLASSES
 from ai.model_loader import ModelLoader
 from ai.prompt_manager import PromptManager
 from ai.translation_engine import TranslationEngine
@@ -86,7 +87,9 @@ class TranslateTab(QWidget):
             interval_seconds=config.get("translation.autosave_interval_seconds", 30),
             parent=self,
         )
-        self._autosave.autosaved.connect(self._on_autosaved)
+        self._autosave.autosaved.connect(
+            lambda time_str: self._update_autosave_indicator(last_save_time=time_str)
+        )
         self._autosave.autosave_error.connect(lambda e: logger.error(e))
 
         self._setup_ui()
@@ -132,11 +135,6 @@ class TranslateTab(QWidget):
             "Select the AI provider and model for automatic translation.\n"
             "Configure API keys and default models in Settings tab → AI Providers."
         )
-        for pid in self._registry.list_enabled_provider_ids():
-            provider = self._registry.get_provider(pid)
-            default_model = self._config.get(f"ai_providers.{pid}.default_model", "")
-            suffix = f" ({default_model})" if default_model else ""
-            self._provider_combo.addItem(f"{provider.name}{suffix}", pid)
         ai_layout.addWidget(self._provider_combo)
         self._ai_info_label = QLabel("Model from Settings")
         self._ai_info_label.setToolTip("Shows the default model for the selected provider. Change in Settings → AI Providers.")
@@ -198,7 +196,7 @@ class TranslateTab(QWidget):
         ctrl_row.addWidget(self._batch_progress_label)
         layout.addLayout(ctrl_row)
 
-        self._table = TranslationTableWidget()
+        self._table = TranslationTableWidget(config=self._config)
         self._table.translation_edited.connect(self._on_translation_edited)
         self._table.ai_requested.connect(self._on_ai_requested)
         self._table.ai_batch_requested.connect(self._on_ai_batch_selected)
@@ -393,6 +391,82 @@ class TranslateTab(QWidget):
 
         self._progress = ProgressWidget()
         layout.addWidget(self._progress)
+        self.refresh_from_settings(preserve_selection=False)
+
+    def refresh_from_settings(self, preserve_selection: bool = True) -> None:
+        """Refresh provider choices and translation behavior after Settings changes."""
+        self._prompt_manager.update_from_config(self._config.get_section("translation"))
+        self._autosave.set_enabled(self._config.get("translation.autosave_enabled", True))
+        self._autosave.set_interval(self._config.get("translation.autosave_interval_seconds", 30))
+        self._refresh_provider_combo(preserve_selection=preserve_selection)
+        self._update_autosave_indicator()
+
+    def _refresh_provider_combo(self, preserve_selection: bool = True) -> None:
+        previous_provider_id = self._provider_combo.currentData() if preserve_selection else ""
+        blocker = QSignalBlocker(self._provider_combo)
+        self._provider_combo.clear()
+
+        first_enabled_index = -1
+        restore_index = -1
+        for provider_id in PROVIDER_CLASSES:
+            try:
+                provider = self._registry.get_provider(provider_id)
+            except ValueError:
+                continue
+
+            enabled = self._registry.is_enabled(provider_id)
+            label = self._build_provider_label(provider_id, provider.name, enabled)
+            self._provider_combo.addItem(label, provider_id)
+            row = self._provider_combo.count() - 1
+            if enabled and first_enabled_index < 0:
+                first_enabled_index = row
+            if provider_id == previous_provider_id:
+                restore_index = row
+
+        if restore_index >= 0:
+            self._provider_combo.setCurrentIndex(restore_index)
+        elif first_enabled_index >= 0:
+            self._provider_combo.setCurrentIndex(first_enabled_index)
+        elif self._provider_combo.count() > 0:
+            self._provider_combo.setCurrentIndex(0)
+
+        del blocker
+        self._on_provider_changed()
+
+    def _build_provider_label(self, provider_id: str, provider_name: str, enabled: bool) -> str:
+        default_model = self._config.get(f"ai_providers.{provider_id}.default_model", "")
+        details = []
+        if default_model:
+            details.append(default_model)
+        if not enabled:
+            details.append("disabled in Settings")
+        if not details:
+            return provider_name
+        return f"{provider_name} ({' | '.join(details)})"
+
+    def _update_autosave_indicator(self, last_save_time: str = "") -> None:
+        autosave_enabled = self._config.get("translation.autosave_enabled", True)
+        autosave_interval = self._config.get("translation.autosave_interval_seconds", 30)
+        if not autosave_enabled:
+            self._autosave_label.setText("Autosave: Off")
+            self._autosave_label.setStyleSheet("font-size: 11px; color: #f9e2af; padding: 0 4px;")
+            self._autosave_label.setToolTip("Autosave is disabled in Settings > Translation.")
+            return
+
+        effective_time = last_save_time or self._autosave.last_save_time
+        if effective_time:
+            self._autosave_label.setText(f"Autosave: {effective_time}")
+            self._autosave_label.setToolTip(
+                f"Autosave is enabled every {autosave_interval} seconds.\n"
+                f"Last successful save: {effective_time}."
+            )
+        else:
+            self._autosave_label.setText(f"Autosave: On ({autosave_interval}s)")
+            self._autosave_label.setToolTip(
+                f"Autosave is enabled every {autosave_interval} seconds.\n"
+                "Progress is saved automatically after you save the project."
+            )
+        self._autosave_label.setStyleSheet("font-size: 11px; color: #a6e3a1; padding: 0 4px;")
 
     @staticmethod
     def _add_separator(layout: QHBoxLayout) -> None:
@@ -602,12 +676,22 @@ class TranslateTab(QWidget):
     def _on_provider_changed(self):
         pid = self._provider_combo.currentData()
         if not pid:
+            self._ai_info_label.setText("No AI providers configured")
             return
+        try:
+            provider = self._registry.get_provider(pid)
+        except ValueError:
+            self._ai_info_label.setText("Provider unavailable")
+            return
+
+        enabled = self._registry.is_enabled(pid)
         default_model = self._config.get(f"ai_providers.{pid}.default_model", "")
-        if default_model:
+        if not enabled:
+            self._ai_info_label.setText(f"{provider.name} is disabled in Settings")
+        elif default_model:
             self._ai_info_label.setText(f"Model: {default_model}")
         else:
-            self._ai_info_label.setText("No default model set in Settings")
+            self._ai_info_label.setText("Enabled, but no default model set in Settings")
 
     def _open_glossary(self):
         """Open the glossary editor dialog."""
@@ -630,7 +714,7 @@ class TranslateTab(QWidget):
 
         def ai_translate_term(term: str) -> str:
             """Translate a single glossary term using the current AI provider."""
-            provider, model = self._get_ai_provider_and_model()
+            provider, model, _ = self._get_ai_provider_and_model()
             if not provider:
                 return ""
             from ai.translation_engine import TranslationEngine
@@ -698,9 +782,9 @@ class TranslateTab(QWidget):
             show_error(self, "Save Error", str(e))
 
     def _auto_translate_all(self):
-        provider, model = self._get_ai_provider_and_model()
+        provider, model, error = self._get_ai_provider_and_model()
         if not provider:
-            show_error(self, "Error", "Select an AI provider in Settings first.")
+            show_error(self, "Error", error or "Select an AI provider in Settings first.")
             return
         if not self._project.entries:
             show_error(self, "Error", "Load a language file first.")
@@ -788,23 +872,28 @@ class TranslateTab(QWidget):
     def _get_ai_provider_and_model(self):
         """Get the current AI provider and model from settings.
 
-        Returns (provider, model_id) or (None, "") if not configured.
+        Returns (provider, model_id, error_message).
         """
         pid = self._provider_combo.currentData()
         if not pid:
-            return None, ""
-        provider = self._registry.get_provider(pid)
+            return None, "", "No AI provider selected."
+        try:
+            provider = self._registry.get_provider(pid)
+        except ValueError as ex:
+            return None, "", str(ex)
+        if not self._registry.is_enabled(pid):
+            return None, "", f"{provider.name} is disabled in Settings > AI Providers. Enable it and save to use it here."
         model = self._config.get(f"ai_providers.{pid}.default_model", "")
-        return provider, model
+        return provider, model, ""
 
     def _on_ai_requested(self, index: int):
         """Handle AI translate request for one entry, with duplicate detection."""
         entry = self._project.get_entry(index)
         if not entry:
             return
-        provider, model = self._get_ai_provider_and_model()
+        provider, model, error = self._get_ai_provider_and_model()
         if not provider:
-            show_error(self, "Error", "Select an AI provider in Settings first.")
+            show_error(self, "Error", error or "Select an AI provider in Settings first.")
             return
 
         engine = TranslationEngine(provider=provider, prompt_manager=self._prompt_manager)
@@ -833,9 +922,9 @@ class TranslateTab(QWidget):
         """Handle AI translate for multiple selected entries."""
         if not indices:
             return
-        provider, model = self._get_ai_provider_and_model()
+        provider, model, error = self._get_ai_provider_and_model()
         if not provider:
-            show_error(self, "Error", "Select an AI provider in Settings first.")
+            show_error(self, "Error", error or "Select an AI provider in Settings first.")
             return
 
         entries = [self._project.get_entry(i) for i in indices]
@@ -1074,7 +1163,7 @@ class TranslateTab(QWidget):
             )
 
         # Get current provider info from settings
-        provider, model = self._get_ai_provider_and_model()
+        provider, model, _ = self._get_ai_provider_and_model()
         provider_name = provider.name if provider else ""
         model_name = model or ""
 

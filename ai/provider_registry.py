@@ -51,15 +51,18 @@ class ProviderRegistry:
         self._providers.clear()
         self._enabled.clear()
 
-        for provider_id, provider_settings in ai_config.items():
+        for provider_id in ai_config:
             if provider_id not in PROVIDER_CLASSES:
                 logger.warning("Unknown provider in config: %s", provider_id)
-                continue
+
+        for provider_id, cls in PROVIDER_CLASSES.items():
+            provider_settings = ai_config.get(provider_id, {})
+            if not isinstance(provider_settings, dict):
+                provider_settings = {}
 
             enabled = provider_settings.get("enabled", False)
             self._enabled[provider_id] = enabled
 
-            cls = PROVIDER_CLASSES[provider_id]
             provider = cls(
                 api_key=provider_settings.get("api_key", ""),
                 base_url=provider_settings.get("base_url", ""),

@@ -30,15 +30,18 @@ class SettingsTab(QWidget):
         self._setup_ui()
 
     def _setup_ui(self):
+        self.setObjectName("settingsTab")
         layout = QHBoxLayout(self)
 
         self._category_list = QListWidget()
+        self._category_list.setObjectName("settingsCategoryList")
         self._category_list.setFixedWidth(160)
         self._category_list.addItems(["General", "AI Providers", "Translation", "Audio / TTS", "Repack", "Advanced"])
         self._category_list.currentRowChanged.connect(self._on_category_changed)
         layout.addWidget(self._category_list)
 
         self._stack = QStackedWidget()
+        self._stack.setObjectName("settingsStack")
         layout.addWidget(self._stack, 1)
 
         self._stack.addWidget(self._build_general_page())
@@ -55,6 +58,7 @@ class SettingsTab(QWidget):
 
     def _build_general_page(self) -> QWidget:
         page = QWidget()
+        page.setObjectName("settingsPage")
         form = QFormLayout(page)
         form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
 
@@ -77,8 +81,11 @@ class SettingsTab(QWidget):
 
     def _build_ai_page(self) -> QWidget:
         scroll = QScrollArea()
+        scroll.setObjectName("settingsScrollArea")
         scroll.setWidgetResizable(True)
+        scroll.viewport().setObjectName("settingsScrollViewport")
         container = QWidget()
+        container.setObjectName("settingsScrollContent")
         main_layout = QVBoxLayout(container)
 
         for provider_id in PROVIDER_CLASSES:
@@ -232,6 +239,7 @@ class SettingsTab(QWidget):
 
     def _build_translation_page(self) -> QWidget:
         page = QWidget()
+        page.setObjectName("settingsPage")
         form = QFormLayout(page)
         form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
 
@@ -291,6 +299,7 @@ class SettingsTab(QWidget):
     def _build_audio_tts_page(self) -> QWidget:
         """Audio / TTS settings page."""
         page = QWidget()
+        page.setObjectName("settingsPage")
         form = QFormLayout(page)
         form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
 
@@ -329,6 +338,7 @@ class SettingsTab(QWidget):
 
     def _build_repack_page(self) -> QWidget:
         page = QWidget()
+        page.setObjectName("settingsPage")
         form = QFormLayout(page)
 
         self._auto_backup_check = QCheckBox()
@@ -354,6 +364,7 @@ class SettingsTab(QWidget):
 
     def _build_advanced_page(self) -> QWidget:
         page = QWidget()
+        page.setObjectName("settingsPage")
         form = QFormLayout(page)
 
         self._log_level_combo = QComboBox()

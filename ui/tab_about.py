@@ -265,6 +265,11 @@ class AboutTab(QWidget):
             - CrimsonDesertTools C# reference implementation including PaChecksum
             algorithm, PAMT/PAPGT readers, and VFS path resolver.</p>
 
+            <p><b>Altair200333</b>
+            (<a href="https://github.com/Altair200333/crimson-desert-model-browser">GitHub</a>)
+            - Crimson Desert Model Browser reference project. Helpful for PAC mesh
+            parsing research, model validation, and cross-checking export behavior.</p>
+
             <hr>
 
             <h3>Built With</h3>

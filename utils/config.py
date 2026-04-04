@@ -11,6 +11,8 @@ import copy
 from pathlib import Path
 from typing import Any
 
+from utils.app_paths import data_path
+
 
 class ConfigManager:
     """Manages application configuration with JSON persistence.
@@ -35,6 +37,19 @@ class ConfigManager:
         self.load()
 
     def _build_defaults(self) -> dict:
+        defaults = self._build_embedded_defaults()
+        try:
+            defaults_path = data_path("default_settings.json")
+            with open(defaults_path, "r", encoding="utf-8") as f:
+                file_defaults = json.load(f)
+            if isinstance(file_defaults, dict):
+                defaults = self._merge_with_defaults(defaults, file_defaults)
+        except (OSError, json.JSONDecodeError, TypeError):
+            pass
+        return defaults
+
+    @staticmethod
+    def _build_embedded_defaults() -> dict:
         return {
             "version": "1.0.0",
             "general": {
@@ -43,6 +58,9 @@ class ConfigManager:
                 "last_game_path": "",
                 "last_output_path": "",
                 "recent_files": []
+            },
+            "ui": {
+                "search_history": {}
             },
             "ai_providers": {
                 "openai": {
@@ -116,6 +134,14 @@ class ConfigManager:
                     "default_model": "",
                     "timeout_seconds": 60,
                     "max_retries": 3
+                },
+                "deepl": {
+                    "enabled": False,
+                    "api_key": "",
+                    "base_url": "https://api.deepl.com/v2",
+                    "default_model": "deepl",
+                    "timeout_seconds": 60,
+                    "max_retries": 3
                 }
             },
             "translation": {
@@ -129,6 +155,11 @@ class ConfigManager:
                 "system_prompt": "",
                 "user_prompt_template": "",
                 "projects_dir": ""
+            },
+            "tts": {
+                "elevenlabs_tts_api_key": "",
+                "azure_tts_api_key": "",
+                "azure_region": "eastus"
             },
             "repack": {
                 "auto_backup": True,

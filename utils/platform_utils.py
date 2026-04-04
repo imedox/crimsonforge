@@ -230,11 +230,18 @@ def _find_packages_dir(game_root: str) -> Optional[str]:
     On Windows/Linux:
         .../Crimson Desert/packages/
     """
+    # Check game_root directly (Crimson Desert stores packages at root level)
+    if os.path.isfile(os.path.join(game_root, "meta", "0.papgt")):
+        return game_root
+
     direct = os.path.join(game_root, "packages")
     if os.path.isfile(os.path.join(direct, "meta", "0.papgt")):
         return direct
 
     for root_dir, dirs, files in os.walk(game_root):
+        # Skip numbered package group dirs (0000-9999) — they may
+        # contain their own meta/ folder which is NOT the root papgt
+        dirs[:] = [d for d in dirs if not d.isdigit()]
         if "meta" in dirs:
             papgt = os.path.join(root_dir, "meta", "0.papgt")
             if os.path.isfile(papgt):

@@ -13,7 +13,7 @@ class PromptManager:
     """Manages AI translation prompts from config."""
 
     def __init__(self, system_prompt_template: str = "", user_prompt_template: str = ""):
-        self._system_template = system_prompt_template or (
+        self._default_system_template = (
             "You are an expert game localization translator specializing in AAA fantasy RPG titles. "
             "Your task is to translate game UI text from {source_lang} to {target_lang} with production-quality accuracy.\n\n"
             "TRANSLATION RULES:\n"
@@ -35,7 +35,9 @@ class PromptManager:
             "9. If the source text is a single word or short label, return only the equivalent single word or short label.\n"
             "10. Return ONLY the translated text. No explanations, no notes, no alternatives, no quotation marks wrapping the result."
         )
-        self._user_template = user_prompt_template or "{text}"
+        self._default_user_template = "{text}"
+        self._system_template = system_prompt_template or self._default_system_template
+        self._user_template = user_prompt_template or self._default_user_template
 
     def get_system_prompt(self, source_lang: str, target_lang: str,
                           glossary_text: str = "", **kwargs) -> str:
@@ -77,7 +79,5 @@ class PromptManager:
 
     def update_from_config(self, config: dict) -> None:
         """Update prompts from the translation config section."""
-        if "system_prompt" in config and config["system_prompt"]:
-            self._system_template = config["system_prompt"]
-        if "user_prompt_template" in config and config["user_prompt_template"]:
-            self._user_template = config["user_prompt_template"]
+        self._system_template = config.get("system_prompt") or self._default_system_template
+        self._user_template = config.get("user_prompt_template") or self._default_user_template

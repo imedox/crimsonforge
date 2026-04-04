@@ -513,6 +513,7 @@ class MainWindow(QMainWindow):
         self._config.set("general.theme", theme_name)
 
     def _on_settings_changed(self):
+        self._translate_tab.refresh_from_settings()
         self._status_label.setText("Settings updated")
 
     def closeEvent(self, event):

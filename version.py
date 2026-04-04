@@ -17,11 +17,34 @@ VERSION BUMPING RULES
 __all__ = ["APP_VERSION", "APP_NAME", "CHANGELOG"]
 
 APP_NAME = "CrimsonForge"
-APP_VERSION = "1.10.0"
+APP_VERSION = "1.11.0"
 
 # Each entry: (version, date, list_of_changes)
 # Newest first. `date` is YYYY-MM-DD.
 CHANGELOG: list[tuple[str, str, list[str]]] = [
+    (
+        "1.11.0", "2026-04-04", [
+            # ── Explorer / Mesh Editing / Search ──
+            "[Feature] Full PAC round-trip editing workflow now supports export, edit, add or delete geometry, re-import, and patch back to game for topology-changing meshes",
+            "[Fix] PAC OBJ import now triangulates Blender quads and n-gons automatically instead of rejecting non-triangle exports",
+            "[Fix] PAC import can now map renamed Blender objects back onto the original game submesh slots using geometry matching heuristics",
+            "[Fix] Exact weapon rebuild path now supports topology-changing PAC edits and partial-submesh deletion while preserving archive integrity and checksum validation",
+            "[Fix] Explorer item-name search now indexes live game item data so searching by in-game names like 'Vow of the Dead King' shows the correct related files immediately",
+            "[Feature] Search history added across Explorer, Audio, and Translate: latest 10 searches persist across restarts, can be clicked to reuse, and each entry can be removed individually",
+            "[Enhancement] Explorer 3D preview now uses the fast hardware-accelerated OpenGL viewer path for much smoother large-mesh rendering",
+            "[Fix] OpenGL preview compatibility improved: uniform uploads now use PyOpenGL-safe ctypes buffers, fixing preview failures on rebuilt high-vertex PAC meshes",
+
+            # ── Translate / Settings / Runtime ──
+            "[Fix] Translate tab AI Provider dropdown now shows the full provider catalog, not only currently enabled providers, with disabled providers clearly labeled for enterprise visibility and control",
+            "[Fix] Translate tab now blocks disabled providers with explicit guidance instead of failing silently, while still reading the latest saved model configuration",
+            "[Fix] Settings changes now refresh the Translate tab immediately: provider list, selected model display, translation prompt state, and autosave behavior update as soon as settings are saved",
+            "[Fix] Settings tab dark-theme white background bug resolved by giving settings pages, stacked panels, and scroll content explicit themed backgrounds",
+            "[Enhancement] Standalone build now bundles the entire data directory for portable runtime configuration, language definitions, and future packaged resources",
+            "[Fix] Bundled executable now resolves data resources through a dedicated runtime path layer, ensuring languages.json and default settings load correctly in both source and packaged builds",
+            "[Fix] Legacy or partial configs now initialize the full AI provider registry consistently, preventing missing-provider states in enterprise settings and translation workflows",
+            "[Fix] Clearing custom translation prompts now properly falls back to the built-in enterprise translation prompt instead of keeping stale simplified prompt state",
+        ],
+    ),
     (
         "1.10.0", "2026-04-02", [
             # ── Enterprise Audio Tab ──
