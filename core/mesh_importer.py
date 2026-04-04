@@ -861,6 +861,9 @@ def _sync_pam_header_mirrors(
     geom_off: int,
 ) -> int:
     """Update mirrored PAM metadata between the main table and geometry block."""
+    def _bbox_close(candidate: tuple[float, float, float, float, float, float], reference: tuple[float, float, float, float, float, float], tol: float = 1e-3) -> bool:
+        return all(math.isfinite(value) and abs(value - target) <= tol for value, target in zip(candidate, reference))
+
     mesh_count = min(len(original_mesh.submeshes), len(new_mesh.submeshes))
     region_start = 0x410 + mesh_count * 0x218
     region_end = min(max(geom_off, region_start), len(result))
@@ -911,6 +914,26 @@ def _sync_pam_header_mirrors(
             new_bbox_bytes,
         )
 
+        for off in range(region_start, max(region_start, region_end - 28) + 1, 4):
+            count_and_bbox = result[off:off + 28]
+            if len(count_and_bbox) < 28:
+                break
+            count = struct.unpack_from("<I", count_and_bbox, 0)[0]
+            bbox = struct.unpack_from("<6f", count_and_bbox, 4)
+            if count == orig_ni and _bbox_close(bbox, old_bbox):
+                struct.pack_into("<I", result, off, new_ni)
+                struct.pack_into("<6f", result, off + 4, *new_bbox)
+                patched += 1
+
+        for off in range(region_start, max(region_start, region_end - 24) + 1, 4):
+            bbox_bytes = result[off:off + 24]
+            if len(bbox_bytes) < 24:
+                break
+            bbox = struct.unpack_from("<6f", bbox_bytes, 0)
+            if _bbox_close(bbox, old_bbox):
+                struct.pack_into("<6f", result, off, *new_bbox)
+                patched += 1
+
         old_pair = struct.pack("<II", orig_nv, orig_ni)
         new_pair = struct.pack("<II", new_nv, new_ni)
         if old_pair == new_pair:
@@ -937,6 +960,33 @@ def _sync_pam_header_mirrors(
                 cursor = pos + len(anchor)
 
     return patched
+
+
+def _sync_pam_geom_size_header(
+    result: bytearray,
+    original_data: bytes,
+    geom_off: int,
+    old_geom_end: int,
+    new_geom_end: int,
+) -> bool:
+    """Refresh PAM header geometry-size field when it mirrors the geometry block length."""
+    header_geom_size_off = 0x40
+    if (
+        len(result) < header_geom_size_off + 4
+        or len(original_data) < header_geom_size_off + 4
+        or geom_off <= 0
+        or old_geom_end < geom_off
+        or new_geom_end < geom_off
+    ):
+        return False
+
+    original_geom_len = old_geom_end - geom_off
+    original_header_geom_len = struct.unpack_from("<I", original_data, header_geom_size_off)[0]
+    if original_header_geom_len != original_geom_len:
+        return False
+
+    struct.pack_into("<I", result, header_geom_size_off, new_geom_end - geom_off)
+    return True
 
 
 def _serialize_pam_combined_layout(
@@ -988,6 +1038,8 @@ def _serialize_pam_combined_layout(
 
     result.extend(geom_data)
     result.extend(index_data)
+    new_geom_end = geom_off + len(geom_data) + len(index_data)
+    _sync_pam_geom_size_header(result, original_data, geom_off, old_geom_end, new_geom_end)
     result.extend(original_data[old_geom_end:])
     mirror_patches = _sync_pam_header_mirrors(result, original_mesh, mesh, geom_off)
     logger.info(
@@ -1047,6 +1099,8 @@ def _serialize_pam_scan_combined_layout(
 
     result.extend(geom_data)
     result.extend(index_data)
+    new_geom_end = layout["geom_off"] + len(geom_data) + len(index_data)
+    _sync_pam_geom_size_header(result, original_data, layout["geom_off"], old_geom_end, new_geom_end)
     result.extend(original_data[old_geom_end:])
     mirror_patches = _sync_pam_header_mirrors(result, original_mesh, mesh, layout["geom_off"])
     logger.info(
@@ -1109,6 +1163,8 @@ def _serialize_pam_backward_scan_combined_layout(
     result.extend(geom_data)
     result.extend(original_data[vertex_end:idx_base])
     result.extend(index_data)
+    new_geom_end = geom_off + len(geom_data) + (idx_base - vertex_end) + len(index_data)
+    _sync_pam_geom_size_header(result, original_data, geom_off, old_geom_end, new_geom_end)
     result.extend(original_data[old_geom_end:])
     mirror_patches = _sync_pam_header_mirrors(result, original_mesh, mesh, geom_off)
     logger.info(
@@ -1164,6 +1220,8 @@ def _serialize_pam_local_layout(
         current_voff += len(sm.vertices) * stride + len(sm.faces) * 6
 
     result.extend(geom_data)
+    new_geom_end = geom_off + len(geom_data)
+    _sync_pam_geom_size_header(result, original_data, geom_off, old_geom_end, new_geom_end)
     result.extend(original_data[old_geom_end:])
     mirror_patches = _sync_pam_header_mirrors(result, original_mesh, mesh, geom_off)
     logger.info(

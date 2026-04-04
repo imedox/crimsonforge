@@ -17,11 +17,32 @@ VERSION BUMPING RULES
 __all__ = ["APP_VERSION", "APP_NAME", "CHANGELOG"]
 
 APP_NAME = "CrimsonForge"
-APP_VERSION = "1.12.0"
+APP_VERSION = "1.13.0"
 
 # Each entry: (version, date, list_of_changes)
 # Newest first. `date` is YYYY-MM-DD.
 CHANGELOG: list[tuple[str, str, list[str]]] = [
+    (
+        "1.13.0", "2026-04-05", [
+            # Ship to App / Mod Manager Packaging
+            "[Feature] Explorer Ship to App now supports a new Mod Manager ZIP (small) mode that exports rebuilt loose mesh files plus manifest.json, modinfo.json, and README.txt for manager-based installs",
+            "[Feature] Translate Ship to App now supports the same small Mod Manager ZIP workflow, exporting loose translated .paloc files and optional loose font files instead of full patched archives",
+            "[Enhancement] Ship dialogs now let you choose between Mod Manager ZIP (small) and Standalone ZIP (full patched archives), keeping both distribution workflows available in one place",
+            "[Enhancement] Manager ZIP packaging now targets current Crimson Desert loose-file manager workflows with files/ payloads, manifest metadata, game-build tagging, and reusable package metadata",
+            "[Enhancement] Explorer mesh manager packages now include paired .pamlod loose files automatically when a .pam edit needs its matching LOD asset",
+
+            # Mesh Preview / PAC Viewing
+            "[Fix] OpenGL mesh preview upload now uses full buffer byte sizes for positions, normals, and indices, fixing cut or missing body parts caused by truncated GPU buffers",
+            "[Fix] Explorer PAC preview now preserves and uses parsed file normals in both the OpenGL and fallback preview paths instead of rebuilding lighting normals incorrectly",
+            "[Fix] PAC preview flattening now uses a safer selective preview path with valid fallback behavior, preventing broken partial renders on edge-case character meshes",
+            "[Fix] PreviewPane initialization and mesh preview backend handling were stabilized so Explorer mesh preview starts reliably without renderer setup regressions",
+
+            # PAM / Patch-to-Game Stability
+            "[Fix] Full PAM rebuild now updates additional local geometry-size headers and hidden mirrored index-count/bounds blocks required by topology-changing static meshes",
+            "[Fix] Import OBJ + Patch to Game for PAM meshes now imports the paired PAMLOD transfer helper correctly instead of skipping the LOD patch with a missing-name error",
+            "[Fix] Repack state now refreshes in-memory PAMT entry offsets and sizes after patching so same-session preview reads the rebuilt file instead of stale archive offsets",
+        ],
+    ),
     (
         "1.12.0", "2026-04-04", [
             # Explorer / Mesh Ship to App

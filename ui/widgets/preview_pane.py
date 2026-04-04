@@ -22,7 +22,10 @@ from PySide6.QtCore import Qt, QUrl
 
 from core.file_detector import detect_file_type
 from ui.widgets.audio_player import AudioPlayerWidget
+from utils.logger import get_logger
 from utils.platform_utils import format_file_size
+
+logger = get_logger("ui.preview_pane")
 
 IDX_EMPTY = 0
 IDX_IMAGE = 1
@@ -158,6 +161,7 @@ class PreviewPane(QWidget):
         # IDX_MESH = 8
         from ui.widgets.mesh_viewer import MeshViewer
         self._mesh_viewer = MeshViewer()
+        logger.info("Mesh preview backend: %s", type(self._mesh_viewer).__name__)
         self._stack.addWidget(self._mesh_viewer)
 
         self._stack.setCurrentIndex(IDX_EMPTY)
@@ -329,31 +333,28 @@ class PreviewPane(QWidget):
     def _show_mesh_info(self, path: str) -> None:
         """Show an interactive 3D preview of the mesh."""
         try:
-            from core.mesh_parser import parse_mesh
+            from core.mesh_parser import build_preview_mesh, parse_mesh
 
             with open(path, "rb") as f:
                 data = f.read()
-            mesh = parse_mesh(data, os.path.basename(path))
+            preview_mesh = build_preview_mesh(data, os.path.basename(path))
 
-            all_verts = []
-            all_faces = []
-            offset = 0
-            for sm in mesh.submeshes:
-                all_verts.extend(sm.vertices)
-                for a, b, c in sm.faces:
-                    all_faces.append((a + offset, b + offset, c + offset))
-                offset += len(sm.vertices)
-
-            if all_verts and all_faces:
+            if preview_mesh.vertices and preview_mesh.faces:
                 info_text = (
-                    f"{mesh.total_vertices:,} verts | {mesh.total_faces:,} faces | "
-                    f"{len(mesh.submeshes)} submesh(es)"
+                    f"{preview_mesh.total_vertices:,} verts | {preview_mesh.total_faces:,} faces | "
+                    f"{preview_mesh.submesh_count} submesh(es)"
                 )
-                self._mesh_viewer.set_mesh(all_verts, all_faces, info_text=info_text)
+                self._mesh_viewer.set_mesh(
+                    preview_mesh.vertices,
+                    preview_mesh.faces,
+                    preview_mesh.normals,
+                    info_text=info_text,
+                )
                 self._info_label.setText(self._info_label.text() + f"  |  {info_text}")
                 self._stack.setCurrentIndex(IDX_MESH)
                 return
 
+            mesh = parse_mesh(data, os.path.basename(path))
             if not mesh.submeshes:
                 self._show_empty("No geometry found in this mesh file")
                 return

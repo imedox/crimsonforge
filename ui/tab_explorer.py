@@ -947,7 +947,7 @@ class ExplorerTab(QWidget):
         try:
             self._progress.set_status(f"Importing and patching {os.path.basename(obj_path)}...")
 
-            from core.mesh_importer import import_obj, build_mesh
+            from core.mesh_importer import import_obj, build_mesh, transfer_pam_edit_to_pamlod_mesh
             imported = import_obj(obj_path)
 
             if not imported.submeshes:
@@ -1036,6 +1036,11 @@ class ExplorerTab(QWidget):
             )
 
             if result.success:
+                basename = os.path.basename(entry.path)
+                temp_path = os.path.join(self._temp_dir, basename)
+                with open(temp_path, "wb") as f:
+                    f.write(new_data)
+                self._preview.preview_file(temp_path)
                 self._progress.set_status(
                     f"Patched {entry.path}: {imported.total_vertices:,} verts, "
                     f"{imported.total_faces:,} faces"

@@ -172,6 +172,9 @@ class RepackEngine:
                     new_orig_size,
                     new_offset=new_offset,
                 )
+                mf.entry.offset = new_offset
+                mf.entry.comp_size = new_comp_size
+                mf.entry.orig_size = new_orig_size
                 logger.info(
                     "Updated file entry: %s offset=0x%08X->0x%08X comp=%d->%d orig=%d->%d",
                     mf.entry.path,

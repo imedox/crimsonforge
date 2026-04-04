@@ -12,6 +12,7 @@ import ctypes
 import math
 from array import array
 from dataclasses import dataclass
+import numpy as np
 
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QColor, QBrush, QMouseEvent, QPainter, QPen, QPolygonF, QWheelEvent
@@ -128,6 +129,7 @@ class _SoftwareMeshViewer(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._vertices = []
+        self._normals = []
         self._faces = []
         self._face_normals = []
         self._rot_x = -25.0
@@ -143,8 +145,12 @@ class _SoftwareMeshViewer(QWidget):
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.StrongFocus)
 
-    def set_mesh(self, vertices, faces, info_text=""):
+    def set_mesh(self, vertices, faces, normals=None, info_text=""):
         self._vertices = list(vertices)
+        if normals and len(normals) == len(self._vertices):
+            self._normals = [tuple(n) for n in normals]
+        else:
+            self._normals = []
         self._faces = list(faces)
         self._info_text = info_text
         self._pan = QPointF(0.0, 0.0)
@@ -174,9 +180,16 @@ class _SoftwareMeshViewer(QWidget):
         self._face_normals = []
         for a, b, c in self._faces:
             if a < len(self._vertices) and b < len(self._vertices) and c < len(self._vertices):
-                self._face_normals.append(_face_normal(
-                    self._vertices[a], self._vertices[b], self._vertices[c]
-                ))
+                if self._normals:
+                    avg = _vec_add(
+                        _vec_add(self._normals[a], self._normals[b]),
+                        self._normals[c],
+                    )
+                    self._face_normals.append(_vec_normalize(avg))
+                else:
+                    self._face_normals.append(_face_normal(
+                        self._vertices[a], self._vertices[b], self._vertices[c]
+                    ))
             else:
                 self._face_normals.append((0.0, 1.0, 0.0))
 
@@ -184,6 +197,7 @@ class _SoftwareMeshViewer(QWidget):
 
     def clear(self):
         self._vertices = []
+        self._normals = []
         self._faces = []
         self._face_normals = []
         self._info_text = ""
@@ -333,9 +347,9 @@ class _SoftwareMeshViewer(QWidget):
 if _GL_RUNTIME_AVAILABLE:
     @dataclass
     class _GpuMesh:
-        positions: array
-        normals: array
-        indices: array
+        positions: np.ndarray
+        normals: np.ndarray
+        indices: np.ndarray
         center: tuple[float, float, float]
         radius: float
 
@@ -345,52 +359,59 @@ if _GL_RUNTIME_AVAILABLE:
             self.yaw = 0.0
             self.pitch = 0.3
             self.radius = 2.0
-            self.target = (0.0, 0.0, 0.0)
+            self.target = np.zeros(3, dtype=np.float32)
             self.fov_y = 45.0
             self._last_x = 0.0
             self._last_y = 0.0
 
         def fit_to_sphere(self, center, radius):
-            self.target = tuple(center)
+            self.target = np.array(center, dtype=np.float32)
             half_fov = math.radians(self.fov_y * 0.5)
             self.radius = max(radius / max(math.sin(half_fov), 1e-6) * 1.3, 0.01)
             self.yaw = math.pi
             self.pitch = 0.3
 
         def eye_position(self):
-            cp = math.cos(self.pitch)
-            sp = math.sin(self.pitch)
-            cy = math.cos(self.yaw)
-            sy = math.sin(self.yaw)
-            return _vec_add(self.target, (self.radius * cp * sy, self.radius * sp, self.radius * cp * cy))
+            cp, sp = math.cos(self.pitch), math.sin(self.pitch)
+            cy, sy = math.cos(self.yaw), math.sin(self.yaw)
+            return self.target + self.radius * np.array([cp * sy, sp, cp * cy], dtype=np.float32)
 
         def view_matrix(self):
             eye = self.eye_position()
-            forward = _vec_normalize(_vec_sub(self.target, eye))
-            right = _vec_cross(forward, (0.0, 1.0, 0.0))
-            if _vec_length(right) < 1e-8:
-                right = (1.0, 0.0, 0.0)
+            forward = self.target - eye
+            forward_len = float(np.linalg.norm(forward))
+            if forward_len < 1e-8:
+                return np.eye(4, dtype=np.float32)
+            forward /= forward_len
+            world_up = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+            right = np.cross(forward, world_up)
+            right_len = float(np.linalg.norm(right))
+            if right_len < 1e-8:
+                right = np.array([1.0, 0.0, 0.0], dtype=np.float32)
             else:
-                right = _vec_normalize(right)
-            up = _vec_cross(right, forward)
+                right /= right_len
+            up = np.cross(right, forward)
 
-            return [
-                right[0], right[1], right[2], -_vec_dot(right, eye),
-                up[0], up[1], up[2], -_vec_dot(up, eye),
-                -forward[0], -forward[1], -forward[2], _vec_dot(forward, eye),
-                0.0, 0.0, 0.0, 1.0,
-            ]
+            m = np.eye(4, dtype=np.float32)
+            m[0, :3] = right
+            m[1, :3] = up
+            m[2, :3] = -forward
+            m[0, 3] = -float(np.dot(right, eye))
+            m[1, 3] = -float(np.dot(up, eye))
+            m[2, 3] = float(np.dot(forward, eye))
+            return m
 
         def proj_matrix(self, aspect):
             near = max(self.radius * 0.001, 0.001)
             far = self.radius * 100.0
             f = 1.0 / math.tan(math.radians(self.fov_y) * 0.5)
-            return [
-                f / max(aspect, 1e-6), 0.0, 0.0, 0.0,
-                0.0, f, 0.0, 0.0,
-                0.0, 0.0, (far + near) / (near - far), (2.0 * far * near) / (near - far),
-                0.0, 0.0, -1.0, 0.0,
-            ]
+            m = np.zeros((4, 4), dtype=np.float32)
+            m[0, 0] = f / max(aspect, 1e-6)
+            m[1, 1] = f
+            m[2, 2] = (far + near) / (near - far)
+            m[2, 3] = (2.0 * far * near) / (near - far)
+            m[3, 2] = -1.0
+            return m
 
         def handle_press(self, x, y):
             self._last_x = x
@@ -422,17 +443,6 @@ if _GL_RUNTIME_AVAILABLE:
         def handle_scroll(self, delta):
             self.radius *= 0.9 ** (delta / 120.0)
             self.radius = max(0.01, self.radius)
-
-
-    def _mul_mat4(a, b):
-        out = [0.0] * 16
-        for row in range(4):
-            for col in range(4):
-                out[row * 4 + col] = sum(
-                    a[row * 4 + k] * b[k * 4 + col]
-                    for k in range(4)
-                )
-        return out
 
 
     _VERT_SHADER = """#version 330 core
@@ -474,6 +484,7 @@ void main() {
             super().__init__(parent)
             self.setFormat(fmt)
             self._vertices = []
+            self._normals = []
             self._faces = []
             self._info_text = ""
             self._camera = _OrbitCamera()
@@ -491,8 +502,12 @@ void main() {
             self.setMouseTracking(True)
             self.setFocusPolicy(Qt.StrongFocus)
 
-        def set_mesh(self, vertices, faces, info_text=""):
+        def set_mesh(self, vertices, faces, normals=None, info_text=""):
             self._vertices = list(vertices)
+            if normals and len(normals) == len(self._vertices):
+                self._normals = [tuple(n) for n in normals]
+            else:
+                self._normals = []
             self._faces = list(faces)
             self._info_text = info_text
 
@@ -500,7 +515,7 @@ void main() {
                 self.clear()
                 return
 
-            self._pending_mesh = self._build_gpu_mesh(self._vertices, self._faces)
+            self._pending_mesh = self._build_gpu_mesh(self._vertices, self._faces, self._normals)
             if self._gl_ready and self.context():
                 self._upload_mesh(self._pending_mesh)
             self.update()
@@ -509,6 +524,7 @@ void main() {
             self._has_mesh = False
             self._pending_mesh = None
             self._vertices = []
+            self._normals = []
             self._faces = []
             self.update()
 
@@ -532,41 +548,32 @@ void main() {
 
         def paintGL(self):
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-            if self._gl_ready and self._has_mesh:
-                try:
-                    aspect = self.width() / max(self.height(), 1)
-                    mvp = _mul_mat4(self._camera.proj_matrix(aspect), self._camera.view_matrix())
-                    glUseProgram(self._program)
-                    glUniformMatrix4fv(
-                        glGetUniformLocation(self._program, "uMVP"),
-                        1,
-                        GL_TRUE,
-                        _as_gl_float_buffer(mvp),
-                    )
-                    light = _vec_normalize((0.6, 0.8, 0.5))
-                    glUniform3fv(
-                        glGetUniformLocation(self._program, "uLightDir"),
-                        1,
-                        _as_gl_float_buffer(light),
-                    )
-                    glUniform3f(glGetUniformLocation(self._program, "uColor"), 0.72, 0.72, 0.76)
-                    glBindVertexArray(self._vao)
-                    glDrawElements(GL_TRIANGLES, self._index_count, GL_UNSIGNED_INT, None)
-                    glBindVertexArray(0)
-                except Exception as exc:
-                    self._gl_error = str(exc)
-                    self._gl_ready = False
-
-            painter = QPainter(self)
-            painter.setPen(QColor(166, 173, 200))
-            overlay = self._info_text
-            if self._gl_error:
-                overlay = f"OpenGL preview unavailable: {self._gl_error}"
-            if overlay:
-                painter.drawText(8, 16, overlay)
-            painter.setPen(QColor(108, 112, 134))
-            painter.drawText(8, self.height() - 8, _VIEWER_HELP_TEXT)
-            painter.end()
+            if not (self._gl_ready and self._has_mesh):
+                return
+            try:
+                aspect = self.width() / max(self.height(), 1)
+                mvp = self._camera.proj_matrix(aspect) @ self._camera.view_matrix()
+                glUseProgram(self._program)
+                glUniformMatrix4fv(
+                    glGetUniformLocation(self._program, "uMVP"),
+                    1,
+                    GL_TRUE,
+                    mvp.astype(np.float32),
+                )
+                light = np.array([0.6, 0.8, 0.5], dtype=np.float32)
+                light /= np.linalg.norm(light)
+                glUniform3fv(
+                    glGetUniformLocation(self._program, "uLightDir"),
+                    1,
+                    light,
+                )
+                glUniform3f(glGetUniformLocation(self._program, "uColor"), 0.72, 0.72, 0.76)
+                glBindVertexArray(self._vao)
+                glDrawElements(GL_TRIANGLES, self._index_count, GL_UNSIGNED_INT, None)
+                glBindVertexArray(0)
+            except Exception as exc:
+                self._gl_error = str(exc)
+                self._gl_ready = False
 
         def mousePressEvent(self, event: QMouseEvent):
             self._camera.handle_press(event.position().x(), event.position().y())
@@ -579,41 +586,57 @@ void main() {
             self._camera.handle_scroll(event.angleDelta().y())
             self.update()
 
-        def _build_gpu_mesh(self, vertices, faces) -> _GpuMesh:
-            vertex_normals = [[0.0, 0.0, 0.0] for _ in vertices]
-            for a, b, c in faces:
-                if a >= len(vertices) or b >= len(vertices) or c >= len(vertices):
-                    continue
-                normal = _face_normal(vertices[a], vertices[b], vertices[c])
-                for idx in (a, b, c):
-                    vertex_normals[idx][0] += normal[0]
-                    vertex_normals[idx][1] += normal[1]
-                    vertex_normals[idx][2] += normal[2]
+        def _build_gpu_mesh(self, vertices, faces, normals=None) -> _GpuMesh:
+            if normals and len(normals) == len(vertices):
+                vertex_normals = [list(_vec_normalize(tuple(n))) for n in normals]
+            else:
+                vertex_normals = [[0.0, 0.0, 0.0] for _ in vertices]
+                for a, b, c in faces:
+                    if a >= len(vertices) or b >= len(vertices) or c >= len(vertices):
+                        continue
+                    normal = _face_normal(vertices[a], vertices[b], vertices[c])
+                    for idx in (a, b, c):
+                        vertex_normals[idx][0] += normal[0]
+                        vertex_normals[idx][1] += normal[1]
+                        vertex_normals[idx][2] += normal[2]
 
-            positions = array("f")
-            normals = array("f")
+            positions = []
+            packed_normals = []
             for idx, vertex in enumerate(vertices):
-                positions.extend((float(vertex[0]), float(vertex[1]), float(vertex[2])))
+                positions.append([float(vertex[0]), float(vertex[1]), float(vertex[2])])
                 normal = _vec_normalize(tuple(vertex_normals[idx]))
-                normals.extend((float(normal[0]), float(normal[1]), float(normal[2])))
+                packed_normals.append([float(normal[0]), float(normal[1]), float(normal[2])])
 
-            indices = array("I")
+            indices = []
             for a, b, c in faces:
                 if a < len(vertices) and b < len(vertices) and c < len(vertices):
                     indices.extend((a, b, c))
 
             if vertices:
+                min_x = min(v[0] for v in vertices)
+                max_x = max(v[0] for v in vertices)
+                min_y = min(v[1] for v in vertices)
+                max_y = max(v[1] for v in vertices)
+                min_z = min(v[2] for v in vertices)
+                max_z = max(v[2] for v in vertices)
+                # Match CDMB's viewer fit so near/far clipping behaves the same on skewed meshes.
                 center = (
-                    sum(v[0] for v in vertices) / len(vertices),
-                    sum(v[1] for v in vertices) / len(vertices),
-                    sum(v[2] for v in vertices) / len(vertices),
+                    (min_x + max_x) * 0.5,
+                    (min_y + max_y) * 0.5,
+                    (min_z + max_z) * 0.5,
                 )
                 radius = max((_vec_length(_vec_sub(v, center)) for v in vertices), default=0.01)
             else:
                 center = (0.0, 0.0, 0.0)
                 radius = 0.01
 
-            return _GpuMesh(positions=positions, normals=normals, indices=indices, center=center, radius=max(radius, 0.01))
+            return _GpuMesh(
+                positions=np.array(positions, dtype=np.float32),
+                normals=np.array(packed_normals, dtype=np.float32),
+                indices=np.array(indices, dtype=np.uint32),
+                center=center,
+                radius=max(radius, 0.01),
+            )
 
         def _upload_mesh(self, mesh: _GpuMesh):
             if not self._gl_ready or mesh is None:
@@ -621,11 +644,11 @@ void main() {
 
             self.makeCurrent()
             glBindBuffer(GL_ARRAY_BUFFER, self._vbo_pos)
-            glBufferData(GL_ARRAY_BUFFER, len(mesh.positions) * mesh.positions.itemsize, mesh.positions.tobytes(), GL_STATIC_DRAW)
+            glBufferData(GL_ARRAY_BUFFER, mesh.positions.nbytes, mesh.positions.tobytes(), GL_STATIC_DRAW)
             glBindBuffer(GL_ARRAY_BUFFER, self._vbo_nor)
-            glBufferData(GL_ARRAY_BUFFER, len(mesh.normals) * mesh.normals.itemsize, mesh.normals.tobytes(), GL_STATIC_DRAW)
+            glBufferData(GL_ARRAY_BUFFER, mesh.normals.nbytes, mesh.normals.tobytes(), GL_STATIC_DRAW)
             glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, self._ebo)
-            glBufferData(GL_ELEMENT_ARRAY_BUFFER, len(mesh.indices) * mesh.indices.itemsize, mesh.indices.tobytes(), GL_STATIC_DRAW)
+            glBufferData(GL_ELEMENT_ARRAY_BUFFER, mesh.indices.nbytes, mesh.indices.tobytes(), GL_STATIC_DRAW)
             self._index_count = len(mesh.indices)
             self._has_mesh = True
             self._camera.fit_to_sphere(mesh.center, mesh.radius)

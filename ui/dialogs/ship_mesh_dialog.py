@@ -11,6 +11,7 @@ import os
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QFileDialog,
     QFormLayout,
@@ -29,8 +30,10 @@ from PySide6.QtWidgets import (
 
 from core.mesh_ship_builder import (
     MeshShipRequest,
+    build_mesh_manager_package,
     build_mesh_ship_package,
     default_mesh_ship_mod_name,
+    write_mesh_manager_zip,
     write_mesh_ship_zip,
 )
 from core.pamt_parser import PamtFileEntry
@@ -59,7 +62,7 @@ class ShipMeshDialog(QDialog):
         self._setup_ui()
 
     def _setup_ui(self) -> None:
-        self.setWindowTitle("Ship Mesh Mod to App - Generate ZIP Package")
+        self.setWindowTitle("Ship Mesh Mod - Generate Package")
         self.setMinimumWidth(980)
         self.setMinimumHeight(560)
 
@@ -106,13 +109,20 @@ class ShipMeshDialog(QDialog):
         )
         options_layout.addWidget(self._include_paired_lod)
 
-        note = QLabel(
-            "The generated ZIP includes patched PAZ/PAMT/PAPGT files, install.bat, "
-            "uninstall.bat, README.txt, and manifest.json for distribution."
-        )
-        note.setWordWrap(True)
-        note.setStyleSheet("color: #89b4fa;")
-        options_layout.addWidget(note)
+        self._package_mode = QComboBox()
+        self._package_mode.addItem("Mod Manager ZIP (small)", "manager")
+        self._package_mode.addItem("Standalone ZIP (full patched archives)", "standalone")
+        saved_mode = str(self._config.get("explorer.mesh_ship.package_mode", "manager")).strip().lower()
+        saved_index = 0 if saved_mode == "manager" else 1
+        self._package_mode.setCurrentIndex(saved_index)
+        self._package_mode.currentIndexChanged.connect(self._refresh_package_mode_ui)
+        options_layout.addWidget(QLabel("Package Mode:"))
+        options_layout.addWidget(self._package_mode)
+
+        self._note = QLabel("")
+        self._note.setWordWrap(True)
+        self._note.setStyleSheet("color: #89b4fa;")
+        options_layout.addWidget(self._note)
 
         layout.addWidget(options_group)
 
@@ -177,6 +187,7 @@ class ShipMeshDialog(QDialog):
         btn_row.addWidget(self._generate_btn)
 
         layout.addLayout(btn_row)
+        self._refresh_package_mode_ui()
         self._refresh_summary()
 
     def _readonly_item(self, text: str) -> QTableWidgetItem:
@@ -282,6 +293,25 @@ class ShipMeshDialog(QDialog):
         total = self._table.rowCount()
         self._summary.setText(f"Ready assets: {ready} / {total}")
 
+    def _package_mode_key(self) -> str:
+        key = self._package_mode.currentData()
+        return str(key or "manager")
+
+    def _refresh_package_mode_ui(self) -> None:
+        if self._package_mode_key() == "manager":
+            self._note.setText(
+                "Generates a much smaller ZIP with loose rebuilt mesh files under files/, "
+                "plus manifest.json and modinfo.json for CDUMM, Crimson Browser, and "
+                "other loose-file aware Crimson Desert mod managers."
+            )
+            self._generate_btn.setText("Generate Manager ZIP")
+            return
+        self._note.setText(
+            "Generates patched PAZ/PAMT/PAPGT files plus install.bat, uninstall.bat, "
+            "README.txt, and manifest.json for direct end-user installation."
+        )
+        self._generate_btn.setText("Generate Standalone ZIP")
+
     def _collect_requests(self) -> list[MeshShipRequest]:
         requests: list[MeshShipRequest] = []
         missing: list[str] = []
@@ -312,6 +342,7 @@ class ShipMeshDialog(QDialog):
         mod_name = self._mod_name.text().strip()
         author = self._author.text().strip()
         version = self._version.text().strip()
+        package_mode = self._package_mode_key()
 
         if not mod_name:
             QMessageBox.warning(self, "Missing", "Enter a mod name.")
@@ -330,6 +361,8 @@ class ShipMeshDialog(QDialog):
             return
 
         default_name = mod_name.replace(" ", "_").replace("-", "_")
+        if package_mode == "manager":
+            default_name += "_manager"
         start_dir = self._config.get(
             "explorer.mesh_ship.last_output_dir",
             os.path.expanduser("~/Desktop"),
@@ -351,6 +384,7 @@ class ShipMeshDialog(QDialog):
             "explorer.mesh_ship.include_paired_lod",
             self._include_paired_lod.isChecked(),
         )
+        self._config.set("explorer.mesh_ship.package_mode", package_mode)
         self._config.set("explorer.mesh_ship.last_output_dir", os.path.dirname(save_path))
         self._config.save()
 
@@ -359,28 +393,52 @@ class ShipMeshDialog(QDialog):
         self._progress.setValue(0)
 
         try:
-            package = build_mesh_ship_package(
-                self._vfs,
-                requests,
-                mod_name=mod_name,
-                author=author,
-                version=version,
-                include_paired_lod=self._include_paired_lod.isChecked(),
-                progress_callback=self._on_progress,
-            )
-            self._progress.setValue(92)
-            self._status.setText("Writing ZIP package...")
-            write_mesh_ship_zip(save_path, package, mod_name, author, version)
+            if package_mode == "manager":
+                package = build_mesh_manager_package(
+                    self._vfs,
+                    requests,
+                    mod_name=mod_name,
+                    author=author,
+                    version=version,
+                    include_paired_lod=self._include_paired_lod.isChecked(),
+                    progress_callback=self._on_progress,
+                )
+                self._progress.setValue(92)
+                self._status.setText("Writing manager ZIP...")
+                write_mesh_manager_zip(save_path, package, mod_name, author, version)
+            else:
+                package = build_mesh_ship_package(
+                    self._vfs,
+                    requests,
+                    mod_name=mod_name,
+                    author=author,
+                    version=version,
+                    include_paired_lod=self._include_paired_lod.isChecked(),
+                    progress_callback=self._on_progress,
+                )
+                self._progress.setValue(92)
+                self._status.setText("Writing standalone ZIP...")
+                write_mesh_ship_zip(save_path, package, mod_name, author, version)
             self._progress.setValue(100)
             self._status.setText("Mesh package ready.")
-            QMessageBox.information(
-                self,
-                "Done",
-                f"ZIP saved to:\n{save_path}\n\n"
-                f"Assets: {package.manifest['asset_count']}\n"
-                f"Patched archive files: {package.manifest['archive_file_count']}\n\n"
-                "End users can extract the ZIP and run install.bat.",
-            )
+            if package_mode == "manager":
+                QMessageBox.information(
+                    self,
+                    "Done",
+                    f"ZIP saved to:\n{save_path}\n\n"
+                    f"Assets: {package.manifest['asset_count']}\n"
+                    f"Loose files: {package.manifest['file_count']}\n\n"
+                    "Import this ZIP into CDUMM, Crimson Browser, or another loose-file aware mod manager.",
+                )
+            else:
+                QMessageBox.information(
+                    self,
+                    "Done",
+                    f"ZIP saved to:\n{save_path}\n\n"
+                    f"Assets: {package.manifest['asset_count']}\n"
+                    f"Patched archive files: {package.manifest['archive_file_count']}\n\n"
+                    "End users can extract the ZIP and run install.bat.",
+                )
             self.accept()
         except Exception as exc:
             QMessageBox.critical(self, "Mesh Ship Error", str(exc))

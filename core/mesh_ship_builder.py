@@ -1,25 +1,27 @@
-"""Build distributable mesh-mod ZIP packages from edited OBJ files.
+"""Build distributable mesh-mod packages from edited OBJ files.
 
-This module turns one or more edited OBJ files into a ready-to-install
-distribution package by:
+This module supports two Explorer export styles:
 
-1. Rebuilding the target PAC/PAM/PAMLOD binaries
-2. Patching the affected PAZ/PAMT/PAPGT files fully in memory
-3. Writing a ZIP that contains:
-   - data/<group>/<patched files>
-   - install.bat
-   - uninstall.bat
-   - README.txt
-   - manifest.json
+1. Standalone installer ZIP
+   - Rebuilds the target PAC/PAM/PAMLOD binaries
+   - Patches the affected PAZ/PAMT/PAPGT files fully in memory
+   - Writes a ZIP with install/uninstall scripts
 
-The output package can be shared with end users without requiring Python
-or the CrimsonForge editor.
+2. Mod-manager ZIP
+   - Rebuilds the target PAC/PAM/PAMLOD binaries
+   - Ships loose rebuilt mesh files under ``files/``
+   - Adds ``manifest.json`` metadata for loose-file aware managers
+
+The standalone output is bigger but can be installed by end users
+without tools. The mod-manager output is much smaller and is intended
+for import into CDUMM, Crimson Browser, and similar archive builders.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import struct
 import zipfile
 from dataclasses import dataclass, asdict
 from datetime import datetime, UTC
@@ -82,6 +84,15 @@ class BuiltMeshShipPackage:
     manifest: dict
 
 
+@dataclass
+class BuiltMeshManagerPackage:
+    """Loose rebuilt mesh files plus metadata for mod-manager ZIPs."""
+
+    loose_files: dict[str, bytes]
+    manifest: dict
+    modinfo: dict
+
+
 def default_mesh_ship_mod_name(entries: list[PamtFileEntry]) -> str:
     """Return a friendly default mod name for selected mesh entries."""
     if not entries:
@@ -102,6 +113,129 @@ def build_mesh_ship_package(
     progress_callback: Optional[Callable[[int, str], None]] = None,
 ) -> BuiltMeshShipPackage:
     """Build patched game files for a mesh-mod distribution ZIP."""
+    modified_by_path, manifest_assets = _prepare_mesh_assets(
+        vfs,
+        requests,
+        include_paired_lod=include_paired_lod,
+        progress_callback=progress_callback,
+    )
+
+    current_step = max(1, len(modified_by_path) + 4)
+
+    def report(message: str, step: int) -> None:
+        pct = min(100, int((step / current_step) * 100))
+        logger.info("[%d%%] %s", pct, message)
+        if progress_callback:
+            progress_callback(pct, message)
+
+    report("Building patched archive files...", len(modified_by_path))
+
+    patched_files = _build_patched_archive_files(
+        vfs,
+        modified_by_path,
+        progress_callback,
+        len(modified_by_path),
+        current_step,
+    )
+
+    manifest = {
+        "schema_version": 1,
+        "kind": "mesh_ship_package",
+        "mod_name": mod_name,
+        "author": author,
+        "version": version,
+        "created_utc": datetime.now(UTC).replace(microsecond=0).isoformat(),
+        "include_paired_lod": include_paired_lod,
+        "asset_count": len(manifest_assets),
+        "archive_file_count": len(patched_files),
+        "assets": [asdict(asset) for asset in manifest_assets],
+    }
+    return BuiltMeshShipPackage(patched_files=patched_files, manifest=manifest)
+
+
+def build_mesh_manager_package(
+    vfs: VfsManager,
+    requests: list[MeshShipRequest],
+    mod_name: str,
+    author: str,
+    version: str,
+    include_paired_lod: bool = True,
+    progress_callback: Optional[Callable[[int, str], None]] = None,
+) -> BuiltMeshManagerPackage:
+    """Build a small loose-file ZIP for mod-manager workflows."""
+    modified_by_path, manifest_assets = _prepare_mesh_assets(
+        vfs,
+        requests,
+        include_paired_lod=include_paired_lod,
+        progress_callback=progress_callback,
+    )
+
+    loose_files = {
+        item["entry"].path: item["new_data"]
+        for _, item in sorted(modified_by_path.items(), key=lambda pair: pair[0])
+    }
+    game_build = _detect_game_build(vfs.packages_path)
+    created_utc = datetime.now(UTC).replace(microsecond=0).isoformat()
+    manifest = {
+        "format": "v1",
+        "schema_version": 1,
+        "kind": "mesh_loose_mod",
+        "game": "Crimson Desert",
+        "title": mod_name,
+        "name": mod_name,
+        "mod_name": mod_name,
+        "author": author,
+        "version": version,
+        "created_utc": created_utc,
+        "generator": "CrimsonForge",
+        "generator_url": "https://github.com/hzeemr/crimsonforge",
+        "game_build": game_build,
+        "include_paired_lod": include_paired_lod,
+        "file_count": len(loose_files),
+        "files_root": "files",
+        "assets": [asdict(asset) for asset in manifest_assets],
+        "files": [
+            {
+                "path": asset.entry_path,
+                "package_group": asset.package_group,
+                "format": asset.format,
+                "generated_from": asset.generated_from,
+                "note": asset.note,
+            }
+            for asset in manifest_assets
+        ],
+    }
+    modinfo = {
+        "title": mod_name,
+        "name": mod_name,
+        "author": author,
+        "version": version,
+        "game": "Crimson Desert",
+        "format": "v1",
+        "type": "mesh_loose_mod",
+        "description": (
+            f"Loose mesh mod generated by CrimsonForge for {len(manifest_assets)} asset(s). "
+            "Import into CDUMM, Crimson Browser, or another loose-file aware Crimson Desert mod manager."
+        ),
+        "generator": "CrimsonForge",
+        "generator_url": "https://github.com/hzeemr/crimsonforge",
+        "game_build": game_build,
+        "created_utc": created_utc,
+    }
+    return BuiltMeshManagerPackage(
+        loose_files=loose_files,
+        manifest=manifest,
+        modinfo=modinfo,
+    )
+
+
+def _prepare_mesh_assets(
+    vfs: VfsManager,
+    requests: list[MeshShipRequest],
+    include_paired_lod: bool = True,
+    progress_callback: Optional[Callable[[int, str], None]] = None,
+) -> tuple[dict[str, dict], list[MeshShipAsset]]:
+    """Rebuild requested meshes and return in-memory entry payloads."""
     if not requests:
         raise ValueError("Select at least one mesh asset to ship.")
 
@@ -121,7 +255,7 @@ def build_mesh_ship_package(
         seen_paths.add(entry_path)
         normalized_requests.append(req)
 
-    total_steps = max(1, len(normalized_requests) * 3 + 4)
+    total_steps = max(1, len(normalized_requests) * 3 + 2)
     current_step = 0
 
     def report(message: str) -> None:
@@ -204,25 +338,7 @@ def build_mesh_ship_package(
                 note="Auto-generated paired LOD from edited PAM mesh.",
             )
         )
-
-    current_step += 1
-    report("Building patched archive files...")
-
-    patched_files = _build_patched_archive_files(vfs, modified_by_path, progress_callback, current_step, total_steps)
-
-    manifest = {
-        "schema_version": 1,
-        "kind": "mesh_ship_package",
-        "mod_name": mod_name,
-        "author": author,
-        "version": version,
-        "created_utc": datetime.now(UTC).replace(microsecond=0).isoformat(),
-        "include_paired_lod": include_paired_lod,
-        "asset_count": len(manifest_assets),
-        "archive_file_count": len(patched_files),
-        "assets": [asdict(asset) for asset in manifest_assets],
-    }
-    return BuiltMeshShipPackage(patched_files=patched_files, manifest=manifest)
+    return modified_by_path, manifest_assets
 
 
 def write_mesh_ship_zip(
@@ -244,6 +360,24 @@ def write_mesh_ship_zip(
         zf.writestr("uninstall.bat", uninstall_bat)
         zf.writestr("README.txt", readme)
         zf.writestr("manifest.json", json.dumps(package.manifest, indent=2, ensure_ascii=False))
+
+
+def write_mesh_manager_zip(
+    output_path: str,
+    package: BuiltMeshManagerPackage,
+    mod_name: str,
+    author: str,
+    version: str,
+) -> None:
+    """Write a small manager-friendly ZIP with loose rebuilt mesh files."""
+    readme = _readme_manager(mod_name, author, version, package.manifest)
+
+    with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
+        for rel_path, data in sorted(package.loose_files.items()):
+            zf.writestr(f"files/{rel_path}", data)
+        zf.writestr("manifest.json", json.dumps(package.manifest, indent=2, ensure_ascii=False))
+        zf.writestr("modinfo.json", json.dumps(package.modinfo, indent=2, ensure_ascii=False))
+        zf.writestr("README.txt", readme)
 
 
 def _build_patched_archive_files(
@@ -439,3 +573,67 @@ def _readme(mod_name: str, author: str, version: str, manifest: dict) -> str:
         "Generated by CrimsonForge\n"
         "https://github.com/hzeemr/crimsonforge\n"
     )
+
+
+def _readme_manager(mod_name: str, author: str, version: str, manifest: dict) -> str:
+    asset_lines = []
+    for asset in manifest.get("assets", []):
+        extra = ""
+        if asset.get("generated_from"):
+            extra = f" [generated from {asset['generated_from']}]"
+        asset_lines.append(f"  - {asset['entry_path']}{extra}")
+
+    assets_block = "\n".join(asset_lines) if asset_lines else "  - No assets listed"
+    return (
+        f"{mod_name}\n"
+        f"{'=' * len(mod_name)}\n\n"
+        f"Author: {author}\n"
+        f"Version: {version}\n"
+        f"Generated: {manifest.get('created_utc', '')}\n"
+        f"Game Build: {manifest.get('game_build', 'unknown')}\n"
+        f"Loose Files: {manifest.get('file_count', 0)}\n\n"
+        "INSTALL\n"
+        "  Import this ZIP into CDUMM, Crimson Browser, or another loose-file aware Crimson Desert mod manager.\n"
+        "  The manager should rebuild the affected archives on the target machine.\n\n"
+        "PACKAGE CONTENTS\n"
+        "  - files/<entry path> rebuilt mesh files\n"
+        "  - manifest.json package metadata\n"
+        "  - modinfo.json manager-friendly mod metadata\n\n"
+        "MESH FILES\n"
+        f"{assets_block}\n\n"
+        "Generated by CrimsonForge\n"
+        "https://github.com/hzeemr/crimsonforge\n"
+    )
+
+
+def _detect_game_build(packages_path: str) -> str:
+    """Return a compact build string for manifests when possible."""
+    meta_dir = os.path.join(packages_path, "meta")
+    version_text = ""
+    paver_path = os.path.join(meta_dir, "0.paver")
+    if os.path.isfile(paver_path):
+        try:
+            with open(paver_path, "rb") as f:
+                data = f.read(6)
+            if len(data) >= 6:
+                major, minor, patch = struct.unpack_from("<HHH", data, 0)
+                version_text = f"v{major}.{minor:02d}.{patch:02d}"
+        except Exception:
+            version_text = ""
+
+    papgt_crc = ""
+    papgt_path = os.path.join(meta_dir, "0.papgt")
+    if os.path.isfile(papgt_path):
+        try:
+            with open(papgt_path, "rb") as f:
+                papgt_crc = f"CRC 0x{pa_checksum(f.read()):08X}"
+        except Exception:
+            papgt_crc = ""
+
+    if version_text and papgt_crc:
+        return f"{version_text} | {papgt_crc}"
+    if version_text:
+        return version_text
+    if papgt_crc:
+        return papgt_crc
+    return "unknown"

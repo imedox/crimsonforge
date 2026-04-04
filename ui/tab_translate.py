@@ -390,10 +390,10 @@ class TranslateTab(QWidget):
         self._ship_btn = QPushButton("  Ship to App  ")
         self._ship_btn.setObjectName("primary")
         self._ship_btn.setToolTip(
-            "Generate a standalone installer for end users.\n"
-            "Packages your translation + font into a single .exe\n"
-            "that end users run to install/uninstall the mod.\n"
-            "Supports auto-updates, custom icon, and vanilla revert."
+            "Generate a distributable translation package.\n"
+            "Choose between a small Mod Manager ZIP with loose files\n"
+            "or a standalone ZIP with patched archives and install.bat.\n"
+            "Supports translation-only packages and optional font inclusion."
         )
         self._ship_btn.clicked.connect(self._ship_to_app)
         bottom_row.addWidget(self._ship_btn)

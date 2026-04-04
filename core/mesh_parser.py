@@ -116,6 +116,18 @@ class ParsedMesh:
 
 
 @dataclass
+class PreviewMesh:
+    """Flattened buffers used by the Explorer preview."""
+    format: str = ""
+    vertices: list[tuple[float, float, float]] = field(default_factory=list)
+    normals: list[tuple[float, float, float]] = field(default_factory=list)
+    faces: list[tuple[int, int, int]] = field(default_factory=list)
+    submesh_count: int = 0
+    total_vertices: int = 0
+    total_faces: int = 0
+
+
+@dataclass
 class PacDescriptor:
     """Per-submesh PAC metadata recovered from section 0."""
     name: str
@@ -1195,70 +1207,96 @@ def _find_pac_descriptors(
     sec0_size: int,
     n_lods: int,
 ) -> list[PacDescriptor]:
-    """Recover PAC descriptors by matching the descriptor body pattern."""
+    """Recover PAC descriptors by matching known 4/3/2-LOD descriptor patterns."""
     region = data[sec0_offset:sec0_offset + sec0_size]
     if not region:
         return []
 
     found: list[tuple[int, PacDescriptor]] = []
     seen_starts: set[int] = set()
+    pad_len = max(4, n_lods)
 
-    for stored_lod_count in range(min(max(n_lods, 1), 4), 0, -1):
-        pattern = bytes([stored_lod_count, *range(stored_lod_count)])
-        pos = 0
-        while True:
-            idx = region.find(pattern, pos)
-            if idx == -1:
-                break
+    def _append_descriptor(idx: int, stored_lod_count: int, vc_off: int, ic_off: int) -> None:
+        desc_start = idx - 35
+        if desc_start in seen_starts or desc_start < 0:
+            return
+        if desc_start + ic_off + stored_lod_count * 4 > len(region):
+            return
+        if region[desc_start] != 0x01:
+            return
+
+        try:
+            floats = struct.unpack_from("<8f", region, desc_start + 3)
+        except struct.error:
+            return
+
+        vert_counts = [
+            struct.unpack_from("<H", region, desc_start + vc_off + i * 2)[0]
+            for i in range(stored_lod_count)
+        ]
+        idx_counts = [
+            struct.unpack_from("<I", region, desc_start + ic_off + i * 4)[0]
+            for i in range(stored_lod_count)
+        ]
+
+        if not any(v > 0 for v in vert_counts):
+            return
+        if any(v > 200000 for v in vert_counts):
+            return
+        if any(i > 20000000 for i in idx_counts):
+            return
+
+        name, material = _find_name_strings(region, desc_start)
+        palette = tuple(region[idx + 1:idx + 1 + stored_lod_count])
+        padded_vc = vert_counts + [0] * max(0, pad_len - stored_lod_count)
+        padded_ic = idx_counts + [0] * max(0, pad_len - stored_lod_count)
+
+        found.append((
+            desc_start,
+            PacDescriptor(
+                name=name,
+                material=material,
+                bbox_min=(floats[2], floats[3], floats[4]),
+                bbox_extent=(floats[5], floats[6], floats[7]),
+                vertex_counts=padded_vc,
+                index_counts=padded_ic,
+                palette=palette,
+                descriptor_offset=sec0_offset + desc_start,
+                stored_lod_count=stored_lod_count,
+            ),
+        ))
+        seen_starts.add(desc_start)
+
+    pos = 0
+    pattern = bytes([0x04, 0x00, 0x01, 0x02, 0x03])
+    while True:
+        idx = region.find(pattern, pos)
+        if idx == -1:
+            break
+        _append_descriptor(idx, 4, 40, 48)
+        pos = idx + len(pattern)
+
+    pos = 0
+    pattern = bytes([0x03, 0x00, 0x01, 0x02])
+    while True:
+        idx = region.find(pattern, pos)
+        if idx == -1:
+            break
+        if idx >= 1 and region[idx - 1] != 0x04:
+            _append_descriptor(idx, 3, 40, 46)
+        pos = idx + len(pattern)
+
+    pos = 0
+    pattern = bytes([0x02, 0x00, 0x01])
+    while True:
+        idx = region.find(pattern, pos)
+        if idx == -1:
+            break
+        if idx >= 1 and region[idx - 1] in (0x03, 0x04):
             pos = idx + len(pattern)
-
-            desc_start = idx - 35
-            if desc_start in seen_starts or desc_start < 0:
-                continue
-            if desc_start + 40 + stored_lod_count * 6 > len(region):
-                continue
-            if region[desc_start] != 0x01:
-                continue
-
-            try:
-                floats = struct.unpack_from("<8f", region, desc_start + 3)
-            except struct.error:
-                continue
-
-            vc_off = desc_start + 40
-            ic_off = vc_off + stored_lod_count * 2
-            vert_counts = [struct.unpack_from("<H", region, vc_off + i * 2)[0]
-                           for i in range(stored_lod_count)]
-            idx_counts = [struct.unpack_from("<I", region, ic_off + i * 4)[0]
-                          for i in range(stored_lod_count)]
-
-            if not any(v > 0 for v in vert_counts):
-                continue
-            if any(v > 200000 for v in vert_counts):
-                continue
-            if any(i > 20000000 for i in idx_counts):
-                continue
-
-            name, material = _find_name_strings(region, desc_start)
-            palette = tuple(region[idx + 1:idx + 1 + stored_lod_count])
-            padded_vc = vert_counts + [0] * max(0, n_lods - stored_lod_count)
-            padded_ic = idx_counts + [0] * max(0, n_lods - stored_lod_count)
-
-            found.append((
-                desc_start,
-                PacDescriptor(
-                    name=name,
-                    material=material,
-                    bbox_min=(floats[2], floats[3], floats[4]),
-                    bbox_extent=(floats[5], floats[6], floats[7]),
-                    vertex_counts=padded_vc,
-                    index_counts=padded_ic,
-                    palette=palette,
-                    descriptor_offset=sec0_offset + desc_start,
-                    stored_lod_count=stored_lod_count,
-                ),
-            ))
-            seen_starts.add(desc_start)
+            continue
+        _append_descriptor(idx, 2, 40, 44)
+        pos = idx + len(pattern)
 
     found.sort(key=lambda item: item[0])
     return [desc for _, desc in found]
@@ -1367,6 +1405,11 @@ def _find_pac_section_layout(
 
     first_vc = first_desc.vertex_counts[lod]
 
+    def _available_vertices(v_start: int, i_start: int) -> int:
+        if i_start <= v_start:
+            return 0
+        return max(0, (i_start - v_start) // 40)
+
     def _scan_idx_start(after_verts: int) -> Optional[int]:
         for adj in range(0, sec_size - after_verts, 2):
             trial = after_verts + adj
@@ -1383,8 +1426,30 @@ def _find_pac_section_layout(
         if i_start is None or i_start + total_indices * 2 > sec_size:
             return float("inf")
 
+        first_ic = next((d.index_counts[lod] for d in descriptors if d.index_counts[lod] > 0), 0)
+        n_tris = first_ic // 3
+        if n_tris == 0:
+            return 0.0
+
+        sample_step = max(1, n_tris // 30)
+        sample_tri_indices = set(range(min(12, n_tris)))
+        sample_tri_indices.update(range(0, n_tris, sample_step))
+        sample_tris: list[tuple[int, int, int]] = []
+        sample_max_idx = -1
+        for tri_idx in sorted(sample_tri_indices):
+            idx_base = sec_off + i_start + tri_idx * 6
+            if idx_base + 6 > len(data):
+                return float("inf")
+            i0, i1, i2 = struct.unpack_from("<HHH", data, idx_base)
+            sample_tris.append((i0, i1, i2))
+            sample_max_idx = max(sample_max_idx, i0, i1, i2)
+
+        needed_vc = max(first_vc, sample_max_idx + 1)
+        if needed_vc <= 0 or needed_vc > _available_vertices(v_start, i_start):
+            return float("inf")
+
         preview_positions = []
-        for i in range(first_vc):
+        for i in range(needed_vc):
             rec_off = sec_off + v_start + i * 40
             if rec_off + 40 > len(data):
                 return float("inf")
@@ -1395,18 +1460,8 @@ def _find_pac_section_layout(
                 _decode_pac_position_u16(zu, first_desc.bbox_min[2], first_desc.bbox_extent[2]),
             ))
 
-        first_ic = next((d.index_counts[lod] for d in descriptors if d.index_counts[lod] > 0), 0)
-        n_tris = first_ic // 3
-        if n_tris == 0:
-            return 0.0
-
-        sample_step = max(1, n_tris // 30)
         total_edge = 0.0
-        for tri_idx in range(0, n_tris, sample_step):
-            idx_base = sec_off + i_start + tri_idx * 6
-            if idx_base + 6 > len(data):
-                return float("inf")
-            i0, i1, i2 = struct.unpack_from("<HHH", data, idx_base)
+        for i0, i1, i2 in sample_tris:
             if max(i0, i1, i2) >= len(preview_positions):
                 return float("inf")
             p0, p1, p2 = preview_positions[i0], preview_positions[i1], preview_positions[i2]
@@ -1467,6 +1522,7 @@ def parse_pac(data: bytes, filename: str = "") -> ParsedMesh:
     lod = 4 - geom_section_idx
     total_indices = sum(d.index_counts[lod] for d in descriptors)
     vert_base, idx_byte_offset = _find_pac_section_layout(data, geom_sec, descriptors, lod, total_indices)
+    index_region_start = idx_byte_offset
 
     desc_vert_offsets = []
     vert_cursor = vert_base
@@ -1494,6 +1550,10 @@ def parse_pac(data: bytes, filename: str = "") -> ParsedMesh:
             if partner_idx is not None:
                 vertex_owner_idx = partner_idx
                 owner_vc = descriptors[partner_idx].vertex_counts[lod]
+            else:
+                available_vc = max(0, (index_region_start - desc_vert_offsets[di]) // 40)
+                if max_idx < available_vc:
+                    owner_vc = max_idx + 1
 
         vertex_start = desc_vert_offsets[vertex_owner_idx]
         verts = []
@@ -1577,6 +1637,149 @@ def _pac_fallback_pam(data: bytes, filename: str) -> ParsedMesh:
         pass
     logger.debug("PAC %s: unsupported format variant, skipping", filename)
     return ParsedMesh(path=filename, format="pac")
+
+
+def _flatten_parsed_mesh_for_preview(mesh: ParsedMesh) -> PreviewMesh:
+    """Flatten ParsedMesh submeshes into a single preview buffer."""
+    preview = PreviewMesh(
+        format=mesh.format,
+        submesh_count=len(mesh.submeshes),
+    )
+
+    vert_offset = 0
+    for sm in mesh.submeshes:
+        preview.vertices.extend(sm.vertices)
+        if sm.normals and len(sm.normals) == len(sm.vertices):
+            preview.normals.extend(sm.normals)
+        else:
+            preview.normals.extend([(0.0, 1.0, 0.0)] * len(sm.vertices))
+        preview.faces.extend((a + vert_offset, b + vert_offset, c + vert_offset) for a, b, c in sm.faces)
+        vert_offset += len(sm.vertices)
+
+    preview.total_vertices = len(preview.vertices)
+    preview.total_faces = len(preview.faces)
+    return preview
+
+
+def _preview_mesh_has_valid_indices(preview: PreviewMesh) -> bool:
+    """Check whether a flattened preview buffer is self-consistent."""
+    if not preview.vertices or not preview.faces:
+        return False
+    max_idx = max(max(face) for face in preview.faces)
+    return max_idx < len(preview.vertices)
+
+
+def _build_pac_preview_mesh(data: bytes, filename: str = "") -> PreviewMesh:
+    """Build PAC preview buffers using the same flattening strategy as CDMB."""
+    sections = _parse_par_sections(data)
+    if not sections:
+        return _flatten_parsed_mesh_for_preview(parse_pac(data, filename))
+
+    sec_by_idx = {section["index"]: section for section in sections}
+    sec0 = sec_by_idx.get(0)
+    if sec0 is None:
+        return _flatten_parsed_mesh_for_preview(parse_pac(data, filename))
+
+    geom_section_idx = next((idx for idx in [4, 3, 2, 1] if idx in sec_by_idx), None)
+    if geom_section_idx is None:
+        return _flatten_parsed_mesh_for_preview(parse_pac(data, filename))
+
+    geom_sec = sec_by_idx[geom_section_idx]
+    lod = 4 - geom_section_idx
+    descriptors = _find_pac_descriptors(data, sec0["offset"], sec0["size"], max(1, len(sections) - 1))
+    if not descriptors:
+        return _flatten_parsed_mesh_for_preview(parse_pac(data, filename))
+
+    total_indices = sum(desc.index_counts[lod] for desc in descriptors)
+    vert_base, idx_byte_offset = _find_pac_section_layout(data, geom_sec, descriptors, lod, total_indices)
+
+    desc_vert_offsets = []
+    cursor = vert_base
+    for desc in descriptors:
+        desc_vert_offsets.append(cursor)
+        cursor += desc.vertex_counts[lod] * 40
+
+    preview = PreviewMesh(format="pac")
+    desc_output_offset: dict[int, int] = {}
+    vert_offset = 0
+
+    for di, desc in enumerate(descriptors):
+        vc = desc.vertex_counts[lod]
+        ic = desc.index_counts[lod]
+        if vc == 0:
+            idx_byte_offset += ic * 2
+            continue
+
+        vert_byte_offset = desc_vert_offsets[di]
+        indices = _read_pac_indices(data, geom_sec["offset"], geom_sec["size"], idx_byte_offset, ic)
+        max_idx = max(indices) if indices else 0
+
+        if max_idx >= vc:
+            partner_idx = next(
+                (pj for pj, partner in enumerate(descriptors) if pj != di and partner.vertex_counts[lod] > max_idx),
+                None,
+            )
+
+            if partner_idx is not None and partner_idx in desc_output_offset:
+                base_offset = desc_output_offset[partner_idx]
+                for i in range(0, len(indices) - 2, 3):
+                    preview.faces.append((
+                        indices[i] + base_offset,
+                        indices[i + 1] + base_offset,
+                        indices[i + 2] + base_offset,
+                    ))
+            else:
+                source_offset = desc_vert_offsets[partner_idx] if partner_idx is not None else vert_byte_offset
+                source_vc = descriptors[partner_idx].vertex_counts[lod] if partner_idx is not None else vc
+                desc_output_offset[di] = vert_offset
+                emitted = 0
+                for vi in range(source_vc):
+                    rec_off = geom_sec["offset"] + source_offset + vi * 40
+                    if rec_off + 40 > len(data):
+                        break
+                    pos, _, normal, _, _ = _decode_pac_vertex_record(data, rec_off, desc)
+                    preview.vertices.append(pos)
+                    preview.normals.append(normal)
+                    emitted += 1
+                for i in range(0, len(indices) - 2, 3):
+                    a, b, c = indices[i], indices[i + 1], indices[i + 2]
+                    if a < emitted and b < emitted and c < emitted:
+                        preview.faces.append((a + vert_offset, b + vert_offset, c + vert_offset))
+                vert_offset += emitted
+        else:
+            desc_output_offset[di] = vert_offset
+            emitted = 0
+            for vi in range(vc):
+                rec_off = geom_sec["offset"] + vert_byte_offset + vi * 40
+                if rec_off + 40 > len(data):
+                    break
+                pos, _, normal, _, _ = _decode_pac_vertex_record(data, rec_off, desc)
+                preview.vertices.append(pos)
+                preview.normals.append(normal)
+                emitted += 1
+            for i in range(0, len(indices) - 2, 3):
+                a, b, c = indices[i], indices[i + 1], indices[i + 2]
+                if a < emitted and b < emitted and c < emitted:
+                    preview.faces.append((a + vert_offset, b + vert_offset, c + vert_offset))
+            vert_offset += emitted
+
+        idx_byte_offset += ic * 2
+
+    preview.submesh_count = len([desc for desc in descriptors if desc.vertex_counts[lod] > 0])
+    preview.total_vertices = len(preview.vertices)
+    preview.total_faces = len(preview.faces)
+    expected_faces = total_indices // 3
+    if not _preview_mesh_has_valid_indices(preview) or preview.total_faces < expected_faces:
+        return _flatten_parsed_mesh_for_preview(parse_pac(data, filename))
+    return preview
+
+
+def build_preview_mesh(data: bytes, filename: str = "") -> PreviewMesh:
+    """Build flattened preview buffers for Explorer rendering."""
+    ext = os.path.splitext(filename.lower())[1]
+    if ext == ".pac":
+        return _build_pac_preview_mesh(data, filename)
+    return _flatten_parsed_mesh_for_preview(parse_mesh(data, filename))
 
 
 # ── Auto-detect and parse ────────────────────────────────────────────
