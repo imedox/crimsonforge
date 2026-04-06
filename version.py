@@ -17,11 +17,47 @@ VERSION BUMPING RULES
 __all__ = ["APP_VERSION", "APP_NAME", "CHANGELOG"]
 
 APP_NAME = "CrimsonForge"
-APP_VERSION = "1.13.0"
+APP_VERSION = "1.15.0"
 
 # Each entry: (version, date, list_of_changes)
 # Newest first. `date` is YYYY-MM-DD.
 CHANGELOG: list[tuple[str, str, list[str]]] = [
+    (
+        "1.15.0", "2026-04-06", [
+            "[Fix] OBJ reimport now preserves the real face-level UV and normal index mapping from Blender exports instead of assuming position, UV, and normal indices always match",
+            "[Fix] Mesh import now correctly splits reused vertices when one position is referenced with multiple UV or normal combinations, preventing mixed, floating, or scrambled textures after reimport",
+            "[Fix] The Blender OBJ texture/material binding issue applies across PAC, PAM, and PAMLOD OBJ reimport workflows because the core importer now rebuilds vertices from the actual vi/ti/ni tuples",
+            "[Feature] Item Catalog tab added: browse raw live-game item data with deep category, subcategory, and subtype taxonomy, searchable tables, path filters, and detailed record inspection",
+            "[Feature] Item Catalog exports added: generate enriched CSV/JSON catalogs from iteminfo, multichange, equip-type, slot, and related raw game tables directly from the installed game packages",
+            "[Feature] Dialogue Catalog was rebuilt into an enterprise browser with Story, Speakers, and Families views, ordered conversation transcripts, search, filtering, and speaker-confidence reporting",
+            "[Enhancement] Dialogue export pipeline now catalogs broad live-game dialogue coverage from localization families such as intro, epilogue, quest, AI ambient, memory, node, and scene-family keys",
+            "[Enhancement] Raw game-data browsing improved with structured table indexing so non-item systems like factions, quests, NPCs, roads, and world tables can be discovered from package data faster",
+            "[Enhancement] Live-package UI tracing and RTL investigation tooling was expanded for Arabic, font-swap, and English/number runtime debugging directly against Steam-installed game files",
+        ],
+    ),
+    (
+        "1.14.0", "2026-04-05", [
+            # Audio / OmniVoice Enterprise TTS
+            "[Feature] OmniVoice Local TTS provider added with native integration for localhost servers, live model discovery, voice catalog loading, health/status checks, and optional bearer-token auth",
+            "[Feature] OmniVoice one-shot cloning now uses original game voice audio as a reference directly from the selected row, with automatic WEM/BNK decode to WAV for local AI synthesis",
+            "[Feature] OmniVoice saved-profile workflow added: save or refresh voice profiles from the Audio tab, then synthesize with clone:<profile> voice mode for repeatable character dubbing",
+            "[Feature] Audio tab now exposes advanced OmniVoice controls for inference steps, guidance scale, denoise, fixed duration, t_shift, position temperature, and class temperature",
+            "[Feature] Batch Generate and Generate All + Patch added to the Audio tab for large-scale NPC redubbing workflows across selected or filtered voice rows",
+            "[Enhancement] Audio generation now normalizes provider output formats like MP3 back to WAV automatically before playback, history storage, and WEM patch conversion",
+            "[Enhancement] Audio settings changes now refresh the Audio tab immediately so provider availability, OmniVoice URL/token/model, and provider UI state update as soon as settings are saved",
+            "[Enhancement] OmniVoice defaults now auto-suggest clone profile names, use selected-row reference audio, prefer unique NPC profile IDs where possible, and bias adult male/female design voices intelligently",
+
+            # Dialogue Coverage / Audio Linking
+            "[Enhancement] Audio text linking now scans all .paloc files instead of only localizationstring*.paloc, allowing wider dialogue coverage from broader game text datasets",
+            "[Enhancement] Audio filename parsing and paloc linking now recognize more dialogue key families such as faction, npcvoice, npcdialog, textdialog, memory, and general-style voice keys",
+            "[Enhancement] Audio linker now tries safe paloc-key aliases for common naming-variant families, improving linkage when audio and localization keys use slightly different prefixes",
+            "[Enhancement] Audio index logging now reports text-link coverage percentage directly for easier enterprise QA of dubbing readiness",
+
+            # Stability / Patch Flow
+            "[Fix] Audio patch and TTS patch flows now report RepackEngine error lists correctly instead of reading a non-existent single error field",
+            "[Fix] Audio tab no longer had legacy TTS patch handlers overriding the newer enterprise workflows, ensuring OmniVoice, batch operations, and normalized audio handling are actually used at runtime",
+        ],
+    ),
     (
         "1.13.0", "2026-04-05", [
             # Ship to App / Mod Manager Packaging

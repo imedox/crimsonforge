@@ -53,6 +53,21 @@ DIALOGUE_PREFIXES = [
     "questdialog", "aidialogstringinfo", "aidialogstringinfogroup",
 ]
 
+# Additional filename markers seen in voice/text assets that should also link
+# into paloc text where possible.
+AUDIO_KEY_START_MARKERS = {
+    "questdialog",
+    "aidialogstringinfo",
+    "aidialogstringinfogroup",
+    "memory",
+    "faction",
+    "general",
+    "extinguishedfire",
+    "npcvoice",
+    "npcdialog",
+    "textdialog",
+}
+
 # Category mapping from key prefix parts
 CATEGORY_MAP = {
     ("questdialog", "hello"): "Quest Greeting",
@@ -124,11 +139,7 @@ def parse_audio_filename(filename: str):
     # Find where the dialogue key starts
     key_start = -1
     for i, p in enumerate(parts):
-        if p in ("questdialog", "aidialogstringinfo", "aidialogstringinfogroup"):
-            key_start = i
-            break
-        # Also check for other patterns like "memory", "faction", "general"
-        if p in ("memory", "faction", "general", "extinguishedfire"):
+        if p in AUDIO_KEY_START_MARKERS:
             key_start = i
             break
 
@@ -160,10 +171,54 @@ def parse_audio_filename(filename: str):
             category = "AI Ambient"
         elif cat_prefix == "aidialogstringinfogroup":
             category = "AI Ambient (Group)"
+        elif cat_prefix == "faction":
+            category = "Faction Dialogue"
+        elif cat_prefix == "npcvoice":
+            category = "NPC Voice"
+        elif cat_prefix == "npcdialog":
+            category = "NPC Dialogue"
+        elif cat_prefix == "textdialog":
+            category = "Dialogue / Subtitle"
+        elif cat_prefix == "memory":
+            category = "Memory / Flashback"
         else:
             category = "Other"
 
     return voice_prefix, paloc_key, npc_gender, npc_class, npc_age, category
+
+
+def _iter_paloc_key_candidates(paloc_key: str) -> list[str]:
+    """Generate safe lookup aliases for audio-driven paloc keys."""
+    key = (paloc_key or "").strip().lower()
+    if not key:
+        return []
+
+    seen: set[str] = set()
+    result: list[str] = []
+
+    def add(value: str):
+        value = (value or "").strip().lower()
+        if value and value not in seen:
+            seen.add(value)
+            result.append(value)
+
+    add(key)
+    add(key.replace("__", "_"))
+
+    prefix_aliases = {
+        "faction_": ("factiondialog_", "factionnode_"),
+        "npcvoice_": ("npcdialog_", "textdialog_"),
+        "npcdialog_": ("npcvoice_", "textdialog_"),
+        "textdialog_": ("npcvoice_", "npcdialog_"),
+        "general_": ("aidialogstringinfo_general_",),
+    }
+    for prefix, aliases in prefix_aliases.items():
+        if key.startswith(prefix):
+            suffix = key[len(prefix):]
+            for alias in aliases:
+                add(f"{alias}{suffix}")
+
+    return result
 
 
 def build_audio_index(vfs: VfsManager, groups: list[str],
@@ -229,12 +284,21 @@ def build_audio_index(vfs: VfsManager, groups: list[str],
 
                 # Link to paloc text
                 if paloc_entries and paloc_key:
-                    key_lower = paloc_key.lower()
-                    if key_lower in paloc_entries:
-                        text_data = paloc_entries[key_lower]
+                    text_data = None
+                    matched_key = ""
+                    for key_lower in _iter_paloc_key_candidates(paloc_key):
+                        if key_lower in paloc_entries:
+                            text_data = paloc_entries[key_lower]
+                            matched_key = key_lower
+                            break
+                    if text_data is not None:
+                        if matched_key != paloc_key.lower():
+                            ae.paloc_key = matched_key
                         if isinstance(text_data, dict):
                             ae.text_translations = text_data
                             ae.text_original = text_data.get(lang, "")
+                            if not ae.text_original and text_data:
+                                ae.text_original = next((v for v in text_data.values() if v), "")
                         elif isinstance(text_data, str):
                             ae.text_original = text_data
 
@@ -247,8 +311,10 @@ def build_audio_index(vfs: VfsManager, groups: list[str],
             progress_callback(int(((gi + 1) / total) * 100),
                               f"Indexing audio: group {group}")
 
-    logger.info("Audio index built: %d entries, %d with paloc text",
-                len(entries), sum(1 for e in entries if e.text_original))
+    linked = sum(1 for e in entries if e.text_original)
+    pct = (linked / len(entries) * 100.0) if entries else 0.0
+    logger.info("Audio index built: %d entries, %d with paloc text (%.1f%%)",
+                len(entries), linked, pct)
     return entries
 
 
@@ -273,15 +339,22 @@ def build_paloc_lookup(vfs: VfsManager, groups: list[str],
         try:
             pamt = vfs.load_pamt(group)
             for entry in pamt.file_entries:
-                if not entry.path.lower().endswith(".paloc"):
-                    continue
-                if "localizationstring" not in entry.path.lower():
+                path_lower = entry.path.lower()
+                if not path_lower.endswith(".paloc"):
                     continue
 
                 # Extract language from filename
-                basename = os.path.splitext(os.path.basename(entry.path))[0]
-                lang_suffix = basename.split("_")[-1]
-                lang = lang_map.get(lang_suffix, lang_suffix)
+                basename = os.path.splitext(os.path.basename(entry.path))[0].lower()
+                lang = ""
+                for suffix, lang_code in lang_map.items():
+                    if basename.endswith(f"_{suffix}"):
+                        lang = lang_code
+                        break
+                if not lang:
+                    lang_suffix = basename.split("_")[-1]
+                    lang = lang_map.get(lang_suffix, "")
+                if not lang:
+                    lang = "generic"
 
                 try:
                     data = vfs.read_entry_data(entry)

@@ -334,6 +334,31 @@ class SettingsTab(QWidget):
         self._azure_region.setToolTip("Azure Speech region (e.g. eastus, westeurope).")
         form.addRow("Azure Region:", self._azure_region)
 
+        omnivoice_label = QLabel("OmniVoice Local Server")
+        omnivoice_label.setStyleSheet("font-weight: bold; font-size: 13px; padding: 8px 0 4px 0;")
+        form.addRow(omnivoice_label)
+
+        omnivoice_info = QLabel(
+            "Local OmniVoice server integration for one-shot cloning, saved voice profiles, "
+            "advanced inference tuning, and high-speed CUDA synthesis when the server is started on NVIDIA GPU."
+        )
+        omnivoice_info.setWordWrap(True)
+        omnivoice_info.setStyleSheet("color: #a6adc8; font-size: 11px; padding: 4px;")
+        form.addRow(omnivoice_info)
+
+        self._omnivoice_url = QLineEdit(self._config.get("tts.omnivoice_base_url", "http://127.0.0.1:8880"))
+        self._omnivoice_url.setToolTip("Base URL for the OmniVoice local server.")
+        form.addRow("OmniVoice URL:", self._omnivoice_url)
+
+        self._omnivoice_key = QLineEdit(self._config.get("tts.omnivoice_api_key", ""))
+        self._omnivoice_key.setEchoMode(QLineEdit.Password)
+        self._omnivoice_key.setToolTip("Optional bearer token if your OmniVoice server requires authentication.")
+        form.addRow("OmniVoice Token:", self._omnivoice_key)
+
+        self._omnivoice_model = QLineEdit(self._config.get("tts.omnivoice_tts_default_model", "omnivoice"))
+        self._omnivoice_model.setToolTip("Default OmniVoice model name to use when the server exposes multiple models.")
+        form.addRow("OmniVoice Model:", self._omnivoice_model)
+
         return page
 
     def _build_repack_page(self) -> QWidget:
@@ -421,6 +446,9 @@ class SettingsTab(QWidget):
         self._config.set("tts.elevenlabs_tts_api_key", self._elevenlabs_key.text())
         self._config.set("tts.azure_tts_api_key", self._azure_speech_key.text())
         self._config.set("tts.azure_region", self._azure_region.text())
+        self._config.set("tts.omnivoice_base_url", self._omnivoice_url.text().strip() or "http://127.0.0.1:8880")
+        self._config.set("tts.omnivoice_api_key", self._omnivoice_key.text())
+        self._config.set("tts.omnivoice_tts_default_model", self._omnivoice_model.text().strip() or "omnivoice")
 
         self._config.set("repack.auto_backup", self._auto_backup_check.isChecked())
         self._config.set("repack.verify_after_repack", self._verify_check.isChecked())

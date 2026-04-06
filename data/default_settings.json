@@ -104,7 +104,23 @@
     "tts": {
         "elevenlabs_tts_api_key": "",
         "azure_tts_api_key": "",
-        "azure_region": "eastus"
+        "azure_region": "eastus",
+        "omnivoice_api_key": "",
+        "omnivoice_base_url": "http://127.0.0.1:8880",
+        "omnivoice_tts_default_model": "omnivoice",
+        "omnivoice_timeout_seconds": 120,
+        "omnivoice_num_step": 32,
+        "omnivoice_guidance_scale": 3.0,
+        "omnivoice_denoise": true,
+        "omnivoice_duration_seconds": 0.0,
+        "omnivoice_t_shift": 0.1,
+        "omnivoice_position_temperature": 5.0,
+        "omnivoice_class_temperature": 0.0,
+        "omnivoice_clone_mode": "one_shot",
+        "omnivoice_profile_name": "",
+        "omnivoice_voice_mode": "auto",
+        "omnivoice_auto_reference": true,
+        "omnivoice_refresh_profile": true
     },
     "repack": {
         "auto_backup": true,

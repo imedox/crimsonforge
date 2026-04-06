@@ -190,7 +190,9 @@ def import_obj(obj_path: str) -> ParsedMesh:
             sm_uv_counts.append(current_vt)
             sm_normal_counts.append(current_vn)
 
-    # Now build each submesh using the FULL vertex range (not just face-referenced)
+    # Now build each submesh using the FULL vertex range (not just face-referenced).
+    # Blender may remap/deduplicate vt/vn indices independently from position indices,
+    # so we must honor the face-level vi/ti/ni tuples instead of assuming vi==ti==ni.
     v_offset = 0
     vt_offset = 0
     vn_offset = 0
@@ -200,24 +202,79 @@ def import_obj(obj_path: str) -> ParsedMesh:
         nvt = sm_uv_counts[si] if si < len(sm_uv_counts) else 0
         nvn = sm_normal_counts[si] if si < len(sm_normal_counts) else 0
 
-        # ALL vertices in this submesh's range
-        local_verts = [all_verts[v_offset + i] if (v_offset + i) < len(all_verts) else (0, 0, 0)
-                       for i in range(nv)]
-        local_uvs = [all_uvs[vt_offset + i] if (vt_offset + i) < len(all_uvs) else (0, 0)
-                     for i in range(nvt)]
-        local_normals = [all_normals[vn_offset + i] if (vn_offset + i) < len(all_normals) else (0, 1, 0)
-                         for i in range(nvn)]
+        # Preserve the original exported vertex slots, including any unused vertices,
+        # then split only when the same position is referenced with multiple UV/normal
+        # pairs after Blender re-export.
+        base_verts = [
+            all_verts[v_offset + i] if (v_offset + i) < len(all_verts) else (0.0, 0.0, 0.0)
+            for i in range(nv)
+        ]
+        base_uvs = [
+            all_uvs[vt_offset + i] if i < nvt and (vt_offset + i) < len(all_uvs) else (0.0, 0.0)
+            for i in range(nv)
+        ]
+        base_normals = [
+            all_normals[vn_offset + i] if i < nvn and (vn_offset + i) < len(all_normals) else (0.0, 1.0, 0.0)
+            for i in range(nv)
+        ]
 
-        # Remap face indices from global to local (subtract offset)
+        local_verts = list(base_verts)
+        local_uvs = list(base_uvs)
+        local_normals = list(base_normals)
+
+        assigned_uvs: list[tuple[float, float] | None] = [None] * nv
+        assigned_normals: list[tuple[float, float, float] | None] = [None] * nv
+        split_vertex_map: dict[tuple[int, int, int], int] = {}
+
+        def _resolve_corner_index(vi: int, ti: int, ni: int) -> int:
+            local_vi = vi - v_offset
+            if not (0 <= local_vi < nv):
+                return 0
+
+            local_ti = ti - vt_offset if ti >= 0 else -1
+            local_ni = ni - vn_offset if ni >= 0 else -1
+            key = (local_vi, local_ti, local_ni)
+            existing_idx = split_vertex_map.get(key)
+            if existing_idx is not None:
+                return existing_idx
+
+            uv_value = (
+                all_uvs[ti]
+                if 0 <= ti < len(all_uvs)
+                else (base_uvs[local_vi] if local_vi < len(base_uvs) else (0.0, 0.0))
+            )
+            normal_value = (
+                all_normals[ni]
+                if 0 <= ni < len(all_normals)
+                else (base_normals[local_vi] if local_vi < len(base_normals) else (0.0, 1.0, 0.0))
+            )
+
+            current_uv = assigned_uvs[local_vi]
+            current_normal = assigned_normals[local_vi]
+            if current_uv is None and current_normal is None:
+                assigned_uvs[local_vi] = uv_value
+                assigned_normals[local_vi] = normal_value
+                local_uvs[local_vi] = uv_value
+                local_normals[local_vi] = normal_value
+                split_vertex_map[key] = local_vi
+                return local_vi
+
+            if current_uv == uv_value and current_normal == normal_value:
+                split_vertex_map[key] = local_vi
+                return local_vi
+
+            clone_idx = len(local_verts)
+            local_verts.append(base_verts[local_vi])
+            local_uvs.append(uv_value)
+            local_normals.append(normal_value)
+            split_vertex_map[key] = clone_idx
+            return clone_idx
+
         local_faces = []
         for face in sm_data["faces_global"]:
             local_face = []
             for vi, ti, ni in face:
-                local_vi = vi - v_offset
-                if 0 <= local_vi < nv:
-                    local_face.append(local_vi)
-                else:
-                    local_face.append(0)  # safety fallback
+                local_face.append(_resolve_corner_index(vi, ti, ni))
             if len(local_face) == 3:
                 local_faces.append(tuple(local_face))
 

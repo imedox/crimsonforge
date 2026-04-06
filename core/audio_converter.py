@@ -126,6 +126,40 @@ def wav_to_ogg(wav_path: str, output_path: str = "", quality: int = 5) -> str:
         return ""
 
 
+def audio_to_wav(audio_path: str, output_path: str = "",
+                 sample_rate: int = 24000, channels: int = 1) -> str:
+    """Convert any ffmpeg-supported audio file to WAV PCM."""
+    ffmpeg = get_ffmpeg_path()
+    if not ffmpeg:
+        raise RuntimeError("ffmpeg not found. Install ffmpeg and add to PATH.")
+
+    if not output_path:
+        basename = os.path.splitext(os.path.basename(audio_path))[0]
+        output_path = os.path.join(tempfile.gettempdir(), f"cf_audio_{basename}.wav")
+
+    try:
+        result = subprocess.run(
+            [
+                ffmpeg, "-y", "-i", audio_path,
+                "-ar", str(sample_rate),
+                "-ac", str(channels),
+                "-sample_fmt", "s16",
+                output_path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if result.returncode == 0 and os.path.isfile(output_path):
+            logger.info("Converted audio to WAV: %s -> %s", audio_path, output_path)
+            return output_path
+        logger.error("ffmpeg audio->WAV failed: %s", result.stderr)
+        return ""
+    except Exception as e:
+        logger.error("Audio to WAV conversion error: %s", e)
+        return ""
+
+
 def wav_to_wem(wav_path: str, original_wem_data: bytes,
                output_path: str = "") -> str:
     """Convert WAV to WEM format for game patching.

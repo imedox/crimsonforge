@@ -23,6 +23,8 @@ from utils.platform_utils import auto_discover_game
 from core.vfs_manager import VfsManager
 from ai.provider_registry import ProviderRegistry
 from ui.tab_explorer import ExplorerTab
+from ui.tab_dialogue_catalog import DialogueCatalogTab
+from ui.tab_item_catalog import ItemCatalogTab
 from ui.tab_repack import RepackTab
 from ui.tab_translate import TranslateTab
 from ui.tab_font import FontTab
@@ -68,6 +70,8 @@ class MainWindow(QMainWindow):
 
         self._setup_tab = self._build_setup_tab()
         self._explorer_tab = ExplorerTab(config)
+        self._item_catalog_tab = ItemCatalogTab()
+        self._dialogue_catalog_tab = DialogueCatalogTab()
         self._repack_tab = RepackTab(config)
         self._translate_tab = TranslateTab(config, registry)
         self._audio_tab = AudioTab(config)
@@ -77,6 +81,8 @@ class MainWindow(QMainWindow):
 
         self._tabs.addTab(self._setup_tab, "Game Setup")
         self._tabs.addTab(self._explorer_tab, "Explorer")
+        self._tabs.addTab(self._item_catalog_tab, "Item Catalog")
+        self._tabs.addTab(self._dialogue_catalog_tab, "Dialogue Catalog")
         self._tabs.addTab(self._repack_tab, "Repack")
         self._tabs.addTab(self._translate_tab, "Translate")
         self._tabs.addTab(self._audio_tab, "Audio")
@@ -406,8 +412,10 @@ class MainWindow(QMainWindow):
 
             self._show_loading_screen(
                 "Loading Crimson Desert...",
-                "Initializing Repack, Translate, and Font tools.",
+                "Initializing Item Catalog, Dialogue Catalog, Repack, Translate, and Font tools.",
             )
+            self._item_catalog_tab.initialize_from_game(self._vfs)
+            self._dialogue_catalog_tab.initialize_from_game(self._vfs)
             self._repack_tab.initialize_from_game(packages_path)
             self._translate_tab.initialize_from_game(self._vfs, self._discovered_palocs)
             self._font_tab.initialize_from_game(self._vfs)
@@ -514,6 +522,10 @@ class MainWindow(QMainWindow):
 
     def _on_settings_changed(self):
         self._translate_tab.refresh_from_settings()
+        try:
+            self._audio_tab.refresh_from_settings()
+        except Exception:
+            pass
         self._status_label.setText("Settings updated")
 
     def closeEvent(self, event):

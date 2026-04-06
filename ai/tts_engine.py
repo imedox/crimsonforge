@@ -19,7 +19,7 @@ import time
 import tempfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Optional, Callable
+from typing import Any, Optional, Callable
 
 from utils.logger import get_logger
 
@@ -35,6 +35,7 @@ class TTSVoice:
     gender: str = ""
     provider: str = ""
     sample_rate: int = 24000
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -59,6 +60,18 @@ class TTSResult:
     char_count: int = 0
     error: str = ""
     success: bool = True
+    audio_format: str = "wav"
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class TTSProviderStatus:
+    """Runtime/provider status information for enterprise UI."""
+    connected: bool
+    message: str = ""
+    device: str = ""
+    model: str = ""
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 class TTSProviderBase(ABC):
@@ -84,9 +97,18 @@ class TTSProviderBase(ABC):
 
     @abstractmethod
     def synthesize(self, text: str, model_id: str = "", voice_id: str = "",
-                   language: str = "", speed: float = 1.0) -> TTSResult:
+                   language: str = "", speed: float = 1.0,
+                   options: Optional[dict[str, Any]] = None) -> TTSResult:
         """Synthesize text to audio."""
         ...
+
+    def get_status(self) -> TTSProviderStatus:
+        """Optional provider/server status for enterprise UI."""
+        return TTSProviderStatus(connected=True, message="")
+
+    def save_profile(self, profile_id: str, ref_audio_path: str,
+                     ref_text: str = "", overwrite: bool = True) -> dict[str, Any]:
+        raise NotImplementedError("This provider does not support saved voice profiles")
 
     @property
     def api_key(self) -> str:
@@ -172,7 +194,8 @@ class TTSOpenAI(TTSProviderBase):
                 for vid, name, gender in api_voices]
 
     def synthesize(self, text: str, model_id: str = "", voice_id: str = "",
-                   language: str = "", speed: float = 1.0) -> TTSResult:
+                   language: str = "", speed: float = 1.0,
+                   options: Optional[dict[str, Any]] = None) -> TTSResult:
         start = time.time()
         try:
             from openai import OpenAI
@@ -197,12 +220,14 @@ class TTSOpenAI(TTSProviderBase):
                 audio_data=audio_data, text=text, voice=voice_id or "alloy",
                 model=model_id, provider="openai_tts",
                 latency_ms=latency, cost_estimate=cost, char_count=len(text),
+                audio_format="wav",
             )
         except Exception as e:
             return TTSResult(
                 audio_data=b"", text=text, voice=voice_id,
                 provider="openai_tts", error=str(e), success=False,
                 latency_ms=(time.time() - start) * 1000,
+                audio_format="wav",
             )
 
 
@@ -253,7 +278,8 @@ class TTSElevenLabs(TTSProviderBase):
             return []
 
     def synthesize(self, text: str, model_id: str = "", voice_id: str = "",
-                   language: str = "", speed: float = 1.0) -> TTSResult:
+                   language: str = "", speed: float = 1.0,
+                   options: Optional[dict[str, Any]] = None) -> TTSResult:
         start = time.time()
         try:
             import requests
@@ -278,12 +304,14 @@ class TTSElevenLabs(TTSProviderBase):
                 audio_data=resp.content, text=text, voice=vid,
                 model=model_id, provider="elevenlabs_tts",
                 latency_ms=latency, char_count=len(text),
+                audio_format="mp3",
             )
         except Exception as e:
             return TTSResult(
                 audio_data=b"", text=text, voice=voice_id,
                 provider="elevenlabs_tts", error=str(e), success=False,
                 latency_ms=(time.time() - start) * 1000,
+                audio_format="mp3",
             )
 
 
@@ -326,7 +354,8 @@ class TTSEdge(TTSProviderBase):
             return []
 
     def synthesize(self, text: str, model_id: str = "", voice_id: str = "",
-                   language: str = "", speed: float = 1.0) -> TTSResult:
+                   language: str = "", speed: float = 1.0,
+                   options: Optional[dict[str, Any]] = None) -> TTSResult:
         start = time.time()
         try:
             import asyncio
@@ -354,12 +383,14 @@ class TTSEdge(TTSProviderBase):
                 audio_data=audio, text=text, voice=voice,
                 model="edge-neural", provider="edge_tts",
                 latency_ms=latency, char_count=len(text), cost_estimate=0.0,
+                audio_format="mp3",
             )
         except Exception as e:
             return TTSResult(
                 audio_data=b"", text=text, voice=voice_id,
                 provider="edge_tts", error=str(e), success=False,
                 latency_ms=(time.time() - start) * 1000,
+                audio_format="mp3",
             )
 
 
@@ -400,7 +431,8 @@ class TTSGoogle(TTSProviderBase):
             return []
 
     def synthesize(self, text: str, model_id: str = "", voice_id: str = "",
-                   language: str = "", speed: float = 1.0) -> TTSResult:
+                   language: str = "", speed: float = 1.0,
+                   options: Optional[dict[str, Any]] = None) -> TTSResult:
         start = time.time()
         try:
             from google.cloud import texttospeech
@@ -426,12 +458,14 @@ class TTSGoogle(TTSProviderBase):
                 voice=voice_id, model="google-neural",
                 provider="google_tts", latency_ms=latency,
                 cost_estimate=cost, char_count=len(text),
+                audio_format="wav",
             )
         except Exception as e:
             return TTSResult(
                 audio_data=b"", text=text, voice=voice_id,
                 provider="google_tts", error=str(e), success=False,
                 latency_ms=(time.time() - start) * 1000,
+                audio_format="wav",
             )
 
 
@@ -475,7 +509,8 @@ class TTSAzure(TTSProviderBase):
             return []
 
     def synthesize(self, text: str, model_id: str = "", voice_id: str = "",
-                   language: str = "", speed: float = 1.0) -> TTSResult:
+                   language: str = "", speed: float = 1.0,
+                   options: Optional[dict[str, Any]] = None) -> TTSResult:
         start = time.time()
         try:
             import requests
@@ -504,12 +539,14 @@ class TTSAzure(TTSProviderBase):
                 audio_data=resp.content, text=text, voice=voice,
                 model="azure-neural", provider="azure_tts",
                 latency_ms=latency, cost_estimate=cost, char_count=len(text),
+                audio_format="wav",
             )
         except Exception as e:
             return TTSResult(
                 audio_data=b"", text=text, voice=voice_id,
                 provider="azure_tts", error=str(e), success=False,
                 latency_ms=(time.time() - start) * 1000,
+                audio_format="wav",
             )
 
 
@@ -548,7 +585,8 @@ class TTSMistral(TTSProviderBase):
         return []
 
     def synthesize(self, text: str, model_id: str = "", voice_id: str = "",
-                   language: str = "", speed: float = 1.0) -> TTSResult:
+                   language: str = "", speed: float = 1.0,
+                   options: Optional[dict[str, Any]] = None) -> TTSResult:
         start = time.time()
         try:
             import requests
@@ -573,12 +611,345 @@ class TTSMistral(TTSProviderBase):
                 audio_data=resp.content, text=text, voice=voice_id or "jessica",
                 model=model_id, provider="mistral_tts",
                 latency_ms=latency, cost_estimate=cost, char_count=len(text),
+                audio_format="wav",
             )
         except Exception as e:
             return TTSResult(
                 audio_data=b"", text=text, voice=voice_id,
                 provider="mistral_tts", error=str(e), success=False,
                 latency_ms=(time.time() - start) * 1000,
+                audio_format="wav",
+            )
+
+
+class TTSOmniVoice(TTSProviderBase):
+    """OmniVoice local server integration for high-fidelity cloning."""
+
+    name = "OmniVoice Local"
+    provider_id = "omnivoice_tts"
+    requires_api_key = False
+
+    def _base_url(self) -> str:
+        return (self._extra.get("base_url") or "http://127.0.0.1:8880").rstrip("/")
+
+    def _timeout(self) -> float:
+        try:
+            return float(self._extra.get("timeout", 120))
+        except Exception:
+            return 120.0
+
+    def _headers(self) -> dict[str, str]:
+        headers = {}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        return headers
+
+    @staticmethod
+    def _encode_multipart(
+        fields: dict[str, Any],
+        files: dict[str, tuple[str, bytes, str]],
+    ) -> tuple[bytes, str]:
+        import uuid
+
+        boundary = f"----CrimsonForgeOmniVoice{uuid.uuid4().hex}"
+        parts: list[bytes] = []
+
+        for name, value in fields.items():
+            parts.append(f"--{boundary}\r\n".encode("utf-8"))
+            parts.append(
+                f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode("utf-8")
+            )
+            parts.append(str(value).encode("utf-8"))
+            parts.append(b"\r\n")
+
+        for name, (filename, content, mime_type) in files.items():
+            parts.append(f"--{boundary}\r\n".encode("utf-8"))
+            parts.append(
+                (
+                    f'Content-Disposition: form-data; name="{name}"; '
+                    f'filename="{filename}"\r\n'
+                ).encode("utf-8")
+            )
+            parts.append(f"Content-Type: {mime_type}\r\n\r\n".encode("utf-8"))
+            parts.append(content)
+            parts.append(b"\r\n")
+
+        parts.append(f"--{boundary}--\r\n".encode("utf-8"))
+        return b"".join(parts), f"multipart/form-data; boundary={boundary}"
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        json_body: Optional[dict[str, Any]] = None,
+        form_fields: Optional[dict[str, Any]] = None,
+        files: Optional[dict[str, tuple[str, bytes, str]]] = None,
+        expect_json: bool = False,
+    ) -> Any:
+        import json
+        import urllib.error
+        import urllib.request
+
+        url = f"{self._base_url()}{path}"
+        headers = dict(self._headers())
+        body: Optional[bytes] = None
+
+        if json_body is not None:
+            body = json.dumps(json_body).encode("utf-8")
+            headers["Content-Type"] = "application/json"
+        elif form_fields is not None or files:
+            body, content_type = self._encode_multipart(form_fields or {}, files or {})
+            headers["Content-Type"] = content_type
+
+        req = urllib.request.Request(url, data=body, headers=headers, method=method.upper())
+        try:
+            with urllib.request.urlopen(req, timeout=self._timeout()) as resp:
+                payload = resp.read()
+                if expect_json:
+                    return json.loads(payload.decode("utf-8")) if payload else {}
+                return payload
+        except urllib.error.HTTPError as e:
+            details = e.read().decode("utf-8", errors="replace").strip()
+            message = f"HTTP {e.code}"
+            if details:
+                message += f": {details}"
+            raise RuntimeError(message) from e
+        except urllib.error.URLError as e:
+            raise RuntimeError(str(e.reason or e)) from e
+
+    @staticmethod
+    def _parse_models(payload: Any) -> list[TTSModel]:
+        items = []
+        if isinstance(payload, dict):
+            items = payload.get("data") or payload.get("models") or []
+        elif isinstance(payload, list):
+            items = payload
+
+        models: list[TTSModel] = []
+        for item in items:
+            if isinstance(item, dict):
+                mid = str(item.get("id") or item.get("model") or item.get("name") or "").strip()
+                if mid:
+                    models.append(TTSModel(mid, str(item.get("name") or mid), "omnivoice_tts"))
+            elif item:
+                mid = str(item).strip()
+                models.append(TTSModel(mid, mid, "omnivoice_tts"))
+        if not models:
+            models.append(TTSModel("omnivoice", "omnivoice", "omnivoice_tts"))
+        return models
+
+    def list_models(self) -> list[TTSModel]:
+        try:
+            return self._parse_models(self._request("GET", "/v1/models", expect_json=True))
+        except Exception as e:
+            logger.warning("Failed to fetch OmniVoice models: %s", e)
+            return [TTSModel("omnivoice", "omnivoice", "omnivoice_tts")]
+
+    def list_voices(self, language: str = "") -> list[TTSVoice]:
+        try:
+            payload = self._request("GET", "/v1/voices", expect_json=True)
+            voices_data = payload.get("voices", []) if isinstance(payload, dict) else payload
+            voices: list[TTSVoice] = []
+            for item in voices_data or []:
+                if not isinstance(item, dict):
+                    continue
+                voice_id = str(item.get("id") or item.get("voice") or "").strip()
+                if not voice_id:
+                    continue
+                vtype = str(item.get("type") or "").strip()
+                description = str(item.get("description") or "").strip()
+                profile_id = str(item.get("profile_id") or "").strip()
+                label = profile_id or description or voice_id
+                if voice_id == "auto":
+                    label = "Auto"
+                elif voice_id.startswith("design:"):
+                    label = "Design / Custom"
+                elif voice_id.startswith("clone:"):
+                    label = profile_id or voice_id.removeprefix("clone:")
+                voices.append(TTSVoice(
+                    voice_id=voice_id,
+                    name=label,
+                    provider="omnivoice_tts",
+                    metadata={
+                        "type": vtype,
+                        "description": description,
+                        "profile_id": profile_id,
+                        "design_attributes": payload.get("design_attributes", {}) if isinstance(payload, dict) else {},
+                    },
+                ))
+            if not voices:
+                voices.append(TTSVoice("auto", "Auto", provider="omnivoice_tts"))
+                voices.append(TTSVoice("design:", "Design / Custom", provider="omnivoice_tts"))
+            return voices
+        except Exception as e:
+            logger.warning("Failed to fetch OmniVoice voices: %s", e)
+            return [
+                TTSVoice("auto", "Auto", provider="omnivoice_tts"),
+                TTSVoice("design:", "Design / Custom", provider="omnivoice_tts"),
+            ]
+
+    def get_status(self) -> TTSProviderStatus:
+        try:
+            payload = self._request("GET", "/health", expect_json=True)
+            models = self.list_models()
+            model_name = models[0].model_id if models else ""
+            device = ""
+            if isinstance(payload, dict):
+                device = str(payload.get("device") or payload.get("runtime", "")).strip()
+            msg = "Connected"
+            if device:
+                msg += f" ({device})"
+            return TTSProviderStatus(
+                connected=True,
+                message=msg,
+                device=device,
+                model=model_name,
+                extra=payload if isinstance(payload, dict) else {},
+            )
+        except Exception as e:
+            return TTSProviderStatus(connected=False, message=str(e))
+
+    def save_profile(self, profile_id: str, ref_audio_path: str,
+                     ref_text: str = "", overwrite: bool = True) -> dict[str, Any]:
+        if not profile_id:
+            raise ValueError("Profile ID is required")
+        if not ref_audio_path or not os.path.isfile(ref_audio_path):
+            raise FileNotFoundError(f"Reference audio not found: {ref_audio_path}")
+
+        with open(ref_audio_path, "rb") as ref_audio:
+            payload = self._request(
+                "POST",
+                "/v1/voices/profiles",
+                form_fields={
+                    "profile_id": profile_id,
+                    "ref_text": ref_text or "",
+                    "overwrite": "true" if overwrite else "false",
+                },
+                files={
+                    "ref_audio": (
+                        os.path.basename(ref_audio_path),
+                        ref_audio.read(),
+                        "audio/wav",
+                    )
+                },
+                expect_json=True,
+            )
+        return payload if payload else {"profile_id": profile_id}
+
+    def _base_payload(self, text: str, model_id: str, voice_id: str,
+                      speed: float, options: dict[str, Any]) -> dict[str, Any]:
+        duration = float(options.get("duration", 0.0) or 0.0)
+        payload: dict[str, Any] = {
+            "model": model_id or "omnivoice",
+            "input": text,
+            "voice": voice_id or "auto",
+            "response_format": options.get("response_format") or "wav",
+            "speed": speed,
+            "stream": bool(options.get("stream", False)),
+            "num_step": int(options.get("num_step", 32)),
+            "guidance_scale": float(options.get("guidance_scale", 3.0)),
+            "denoise": bool(options.get("denoise", True)),
+            "t_shift": float(options.get("t_shift", 0.1)),
+            "position_temperature": float(options.get("position_temperature", 5.0)),
+            "class_temperature": float(options.get("class_temperature", 0.0)),
+        }
+        if duration > 0:
+            payload["duration"] = duration
+        return payload
+
+    def synthesize(self, text: str, model_id: str = "", voice_id: str = "",
+                   language: str = "", speed: float = 1.0,
+                   options: Optional[dict[str, Any]] = None) -> TTSResult:
+        start = time.time()
+        options = dict(options or {})
+        clone_mode = options.get("clone_mode") or "voice"
+        try:
+            if clone_mode == "one_shot":
+                ref_audio_path = str(options.get("ref_audio_path") or "").strip()
+                if not ref_audio_path or not os.path.isfile(ref_audio_path):
+                    raise FileNotFoundError("OmniVoice one-shot cloning requires a reference audio WAV")
+
+                form_data = {
+                    "text": text,
+                    "ref_text": str(options.get("ref_text") or ""),
+                    "speed": str(speed),
+                    "num_step": str(int(options.get("num_step", 32))),
+                    "guidance_scale": str(float(options.get("guidance_scale", 3.0))),
+                    "denoise": "true" if bool(options.get("denoise", True)) else "false",
+                    "t_shift": str(float(options.get("t_shift", 0.1))),
+                    "position_temperature": str(float(options.get("position_temperature", 5.0))),
+                    "class_temperature": str(float(options.get("class_temperature", 0.0))),
+                }
+                duration = float(options.get("duration", 0.0) or 0.0)
+                if duration > 0:
+                    form_data["duration"] = str(duration)
+
+                with open(ref_audio_path, "rb") as ref_audio:
+                    audio_data = self._request(
+                        "POST",
+                        "/v1/audio/speech/clone",
+                        form_fields=form_data,
+                        files={
+                            "ref_audio": (
+                                os.path.basename(ref_audio_path),
+                                ref_audio.read(),
+                                "audio/wav",
+                            )
+                        },
+                    )
+                latency = (time.time() - start) * 1000
+                return TTSResult(
+                    audio_data=audio_data,
+                    text=text,
+                    voice="one-shot-clone",
+                    model=model_id or "omnivoice",
+                    provider="omnivoice_tts",
+                    latency_ms=latency,
+                    char_count=len(text),
+                    audio_format="wav",
+                    metadata={"clone_mode": clone_mode},
+                )
+
+            if clone_mode == "saved_profile":
+                profile_id = str(options.get("profile_id") or "").strip()
+                if not profile_id:
+                    raise ValueError("OmniVoice saved-profile mode requires a profile name")
+                ref_audio_path = str(options.get("ref_audio_path") or "").strip()
+                if ref_audio_path and os.path.isfile(ref_audio_path) and options.get("refresh_profile", True):
+                    self.save_profile(
+                        profile_id,
+                        ref_audio_path,
+                        ref_text=str(options.get("ref_text") or ""),
+                        overwrite=bool(options.get("overwrite_profile", True)),
+                    )
+                voice_id = f"clone:{profile_id}"
+
+            payload = self._base_payload(text, model_id, voice_id, speed, options)
+            audio_data = self._request("POST", "/v1/audio/speech", json_body=payload)
+            latency = (time.time() - start) * 1000
+            return TTSResult(
+                audio_data=audio_data,
+                text=text,
+                voice=payload["voice"],
+                model=payload["model"],
+                provider="omnivoice_tts",
+                latency_ms=latency,
+                char_count=len(text),
+                audio_format=str(payload.get("response_format") or "wav"),
+                metadata={"clone_mode": clone_mode},
+            )
+        except Exception as e:
+            return TTSResult(
+                audio_data=b"",
+                text=text,
+                voice=voice_id,
+                provider="omnivoice_tts",
+                error=str(e),
+                success=False,
+                latency_ms=(time.time() - start) * 1000,
+                audio_format="wav",
+                metadata={"clone_mode": clone_mode},
             )
 
 
@@ -589,6 +960,7 @@ TTS_PROVIDER_CLASSES: dict[str, type] = {
     "google_tts": TTSGoogle,
     "azure_tts": TTSAzure,
     "mistral_tts": TTSMistral,
+    "omnivoice_tts": TTSOmniVoice,
 }
 
 # Map TTS providers to translation providers whose API key they share.
@@ -600,6 +972,7 @@ TTS_KEY_SHARING = {
     "elevenlabs_tts": None,       # own key (TTS-only provider)
     "azure_tts": None,            # own key (TTS-only provider)
     "edge_tts": None,             # no key needed (free)
+    "omnivoice_tts": None,        # local server, optional bearer token
 }
 
 # Which translation providers also support TTS (use same API key).
@@ -617,7 +990,15 @@ TRANSLATION_PROVIDERS_WITH_TTS = {
 }
 
 # TTS-only providers (not translation providers, need own API key)
-TTS_ONLY_PROVIDERS = {"elevenlabs_tts", "azure_tts", "edge_tts"}
+TTS_ONLY_PROVIDERS = {"elevenlabs_tts", "azure_tts", "edge_tts", "omnivoice_tts"}
+
+
+def get_tts_model_config_key(provider_id: str) -> str:
+    """Return the config key used to store the default model for a TTS provider."""
+    shared = TTS_KEY_SHARING.get(provider_id)
+    if shared:
+        return f"ai_providers.{shared}.default_tts_model"
+    return f"tts.{provider_id}_default_model"
 
 
 class TTSEngine:
@@ -663,6 +1044,11 @@ class TTSEngine:
             extra = {}
             if pid == "azure_tts":
                 extra["region"] = _get("tts.azure_region", "eastus")
+            elif pid == "omnivoice_tts":
+                extra["base_url"] = _get("tts.omnivoice_base_url", "http://127.0.0.1:8880")
+                if not key:
+                    key = _get("tts.omnivoice_api_key", "")
+                extra["timeout"] = _get("tts.omnivoice_timeout_seconds", 120)
 
             self._providers[pid] = cls(api_key=key, **extra)
 
@@ -690,17 +1076,19 @@ class TTSEngine:
 
     def synthesize(self, text: str, provider_id: str = "",
                    model_id: str = "", voice_id: str = "",
-                   language: str = "", speed: float = 1.0) -> TTSResult:
+                   language: str = "", speed: float = 1.0,
+                   options: Optional[dict[str, Any]] = None) -> TTSResult:
         p = self.get_provider(provider_id)
         if not p:
             return TTSResult(audio_data=b"", text=text, voice=voice_id,
                              provider=provider_id, error="Provider not found",
                              success=False)
-        return p.synthesize(text, model_id, voice_id, language, speed)
+        return p.synthesize(text, model_id, voice_id, language, speed, options=options)
 
     def batch_synthesize(self, entries: list[dict], provider_id: str = "",
                          model_id: str = "", voice_id: str = "",
                          language: str = "", speed: float = 1.0,
+                         options: Optional[dict[str, Any]] = None,
                          progress_callback: Optional[Callable] = None) -> list[TTSResult]:
         results = []
         total = len(entries)
@@ -708,7 +1096,10 @@ class TTSEngine:
             text = entry.get("text", "")
             if not text:
                 continue
-            r = self.synthesize(text, provider_id, model_id, voice_id, language, speed)
+            entry_options = dict(options or {})
+            if isinstance(entry.get("options"), dict):
+                entry_options.update(entry["options"])
+            r = self.synthesize(text, provider_id, model_id, voice_id, language, speed, entry_options)
             results.append(r)
             if progress_callback:
                 progress_callback(int(((i + 1) / total) * 100),
