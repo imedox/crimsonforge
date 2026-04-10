@@ -487,6 +487,7 @@ class AudioTab(QWidget):
         self._tts_lang.addItems(["Auto", "en-US", "ko-KR", "ja-JP", "zh-CN"])
         self._tts_lang.setCurrentText("Auto")
         self._tts_lang.currentTextChanged.connect(lambda _: self._refresh_tts_voices())
+        self._tts_lang.currentTextChanged.connect(self._on_tts_lang_changed)
         
         # Make language dropdown searchable/filterable
         self._tts_lang.setInsertPolicy(QComboBox.NoInsert)
@@ -798,6 +799,34 @@ class AudioTab(QWidget):
         lang = self._current_tts_language_query()
         if not lang:
             return ""
+            
+        # Mapping from OmniVoice list names to internal game codes
+        mapping = {
+            "Korean": "ko",
+            "English": "en",
+            "Japanese": "ja",
+            "Russian": "ru",
+            "Turkish": "tr",
+            "Spanish": "es",
+            "French": "fr",
+            "German": "de",
+            "Italian": "it",
+            "Polish": "pl",
+        }
+        
+        if lang in mapping:
+            return mapping[lang]
+            
+        # Special cases and variations
+        l = lang.lower()
+        if "spanish" in l:
+            return "es-mx" if "mx" in l else "es"
+        if "chinese" in l:
+            return "zh-tw" if "tw" in l else "zh-cn"
+        if "portuguese" in l:
+            return "pt-br"
+            
+        # Fallback to standard BCP-47 split
         return lang.split("-")[0].lower()
 
     def _is_omnivoice_provider(self, provider_id: str = "") -> bool:
@@ -932,6 +961,7 @@ class AudioTab(QWidget):
         ae = self._model.row_at(index.row())
         if ae:
             self._play_and_show(ae)
+            self._update_tts_text_from_selection(ae)
 
     def _play_and_show(self, ae: AudioEntry):
         """Play audio and show linked text."""
@@ -1257,14 +1287,32 @@ class AudioTab(QWidget):
             path = self._ensure_reference_audio_for_entry(ae)
             self._omnivoice_ref_audio.setText(path)
             
-            # Force auto-fill reference transcript from display or entry
-            ref_text = self._build_tts_text_for_entry(ae)
+            # Force auto-fill reference transcript from entry's original text (matching the audio language)
+            ref_text = ae.text_original or ""
             self._omnivoice_ref_text.setPlainText(ref_text)
                 
             self._autofill_omnivoice_context(ae)
             self._progress.set_status(f"Reference ready: {os.path.basename(path)}")
         except Exception as e:
             show_error(self, "Reference Audio", str(e))
+
+    def _update_tts_text_from_selection(self, ae: AudioEntry = None):
+        if not ae:
+            ae = self._current_audio_entry()
+        if not ae:
+            return
+            
+        # If user hasn't manually typed anything or we are auto-filling...
+        # We'll overwrite the text if it's currently empty or previously auto-filled.
+        # But for simplicity as requested, we'll sync it when clicked.
+        text = self._build_tts_text_for_entry(ae)
+        if text:
+            self._tts_text.setPlainText(text)
+
+    def _on_tts_lang_changed(self, lang: str):
+        ae = self._current_audio_entry()
+        if ae:
+            self._update_tts_text_from_selection(ae)
 
     def _ensure_reference_audio_for_entry(self, ae: AudioEntry) -> str:
         entry = ae.entry
@@ -1304,8 +1352,8 @@ class AudioTab(QWidget):
             except Exception:
                 pass
         
-        # Sync reference transcript with current selection
-        self._omnivoice_ref_text.setPlainText(self._build_tts_text_for_entry(ae) or "")
+        # Sync reference transcript with current selection's original text
+        self._omnivoice_ref_text.setPlainText(ae.text_original or "")
 
         if not self._omnivoice_profile_name.text().strip():
             self._omnivoice_profile_name.setText(self._suggest_omnivoice_profile_name(ae))
@@ -1347,15 +1395,17 @@ class AudioTab(QWidget):
 
     def _build_tts_text_for_entry(self, ae: AudioEntry, language_override: str = "") -> str:
         lang_code = language_override or self._current_tts_language_code()
-        if ae.text_translations and lang_code:
+        if lang_code:
             text = ae.text_translations.get(lang_code, "")
             if not text:
                 for key, value in ae.text_translations.items():
                     if key.startswith(lang_code):
                         text = value
                         break
-            if text:
-                return text
+            # If a specific language was requested but not found, return empty (per user request)
+            return text if text else ""
+            
+        # No specific language requested (Auto), return original text
         return ae.text_original or ""
 
     def _build_omnivoice_options(self, ae: AudioEntry = None, batch_mode: bool = False) -> dict:
@@ -1424,7 +1474,7 @@ class AudioTab(QWidget):
     def _generate_tts(self):
         text = self._tts_text.toPlainText().strip()
         if not text:
-            show_error(self, "Error", "Enter text")
+            show_error(self, "TTS Error", "Generate file audio failed, please put text on the text section and try again.")
             return
         if not self._tts_engine:
             return
@@ -1513,8 +1563,13 @@ class AudioTab(QWidget):
             with open(wem_path, "rb") as f:
                 new_data = f.read()
 
+            orig_text = ae.text_original or "[No text linked]"
+            new_text = self._tts_text.toPlainText().strip()
+            
             if not confirm_action(self, "Patch Audio",
                                   f"Replace {entry.path}?\n\n"
+                                  f"Original Dialogue:\n{orig_text[:200]}\n\n"
+                                  f"New TTS Text:\n{new_text[:200]}\n\n"
                                   f"Original: {format_file_size(len(orig_data))} (WEM Vorbis)\n"
                                   f"New: {format_file_size(len(new_data))} (WEM Vorbis)\n\n"
                                   f"The generated audio will be written directly into the game archive."):
